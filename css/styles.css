@@ -164,9 +164,14 @@ svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; s
 .tab-list {
   display: flex; align-items: flex-end; gap: 2px;
   min-width: 0; align-self: stretch;
-  overflow-x: auto; scrollbar-width: thin;
+  /* Extend over the header's bottom border so the active tab can cover it. */
+  margin-bottom: -1px;
+  /* Scrolls sideways (wheel, trackpad, touch) without a visible scrollbar,
+     which would otherwise sit between the tabs and the board. */
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
   padding-top: 10px;
 }
+.tab-list::-webkit-scrollbar { display: none; }
 
 .tab {
   position: relative;
@@ -178,11 +183,9 @@ svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; s
 }
 .tab:hover { background: var(--surface-2); color: var(--text); }
 .tab.is-active {
-  background: var(--bg);
+  background: var(--board);
   border-color: var(--border);
   color: var(--text);
-  margin-bottom: -1px;
-  padding-bottom: 1px;
 }
 .tab-name {
   min-width: 0; max-width: 180px;
