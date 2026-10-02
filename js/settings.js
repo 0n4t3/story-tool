@@ -51,12 +51,17 @@
     if (mq.addEventListener) mq.addEventListener('change', onChange);
   }
 
-  /** Board layout on wide screens: "columns" (every subplot a column) or "cards". */
-  function view() { return read().view === 'cards' ? 'cards' : 'columns'; }
+  /**
+   * Board layout on wide screens: "columns" (every subplot a column), "cards"
+   * (one subplot a column, the rest cards) or "matrix" (the outline only, as a
+   * snake of cards).
+   */
+  var VIEWS = ['columns', 'cards', 'matrix'];
+  function view() { var v = read().view; return VIEWS.indexOf(v) >= 0 ? v : 'columns'; }
 
   function setView(v) {
     var s = read();
-    s.view = v === 'cards' ? 'cards' : 'columns';
+    s.view = VIEWS.indexOf(v) >= 0 ? v : 'columns';
     write(s);
   }
 
