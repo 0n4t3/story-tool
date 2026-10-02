@@ -302,6 +302,14 @@ a.btn { text-decoration: none; }
 .tab-add { flex: none; }
 
 .header-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+
+/* Columns / Cards layout switch */
+.view-switch {
+  display: inline-flex; gap: 2px; padding: 2px; margin-right: 6px;
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.view-switch .icon-btn { width: 30px; height: 28px; border-radius: 7px; }
+.view-switch .icon-btn[aria-pressed="true"] { background: var(--surface-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .save-status {
   display: inline-flex; align-items: center; gap: 6px;
   margin-right: 6px; padding: 4px 8px;
@@ -428,12 +436,12 @@ a.btn { text-decoration: none; }
 .card:hover { box-shadow: var(--shadow-md); }
 .card.is-linked { border-color: var(--primary); border-left-color: var(--state-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent); }
 
-.card[data-state="idea"] { --state-color: var(--state-idea); }
-.card[data-state="outlined"] { --state-color: var(--state-outlined); }
-.card[data-state="drafting"] { --state-color: var(--state-drafting); }
-.card[data-state="drafted"] { --state-color: var(--state-drafted); }
-.card[data-state="revising"] { --state-color: var(--state-revising); }
-.card[data-state="done"] { --state-color: var(--state-done); }
+[data-state="idea"] { --state-color: var(--state-idea); }
+[data-state="outlined"] { --state-color: var(--state-outlined); }
+[data-state="drafting"] { --state-color: var(--state-drafting); }
+[data-state="drafted"] { --state-color: var(--state-drafted); }
+[data-state="revising"] { --state-color: var(--state-revising); }
+[data-state="done"] { --state-color: var(--state-done); }
 
 .card-grip {
   display: grid; place-items: center; flex: none;
@@ -455,11 +463,14 @@ a.btn { text-decoration: none; }
 .card-body { flex: 1; min-width: 0; }
 .card-title { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
-.card-summary {
-  margin: 6px 0 0; font-size: 12.5px; color: var(--muted);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+.card-description {
+  margin: 3px 0 0; font-size: 13px; line-height: 1.4; color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   overflow-wrap: anywhere;
 }
+/* Shown when a chapter has notes; hover for a preview. */
+.card-notes { display: inline-grid; place-items: center; color: var(--muted); cursor: help; }
+.card-notes svg { width: 15px; height: 15px; }
 
 .state-pill {
   display: inline-flex; align-items: center; gap: 5px;
@@ -732,7 +743,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 
 [data-theme="summer"] body { font-size: 15px; }
 /* Subplot columns and the "Add subplot" button sit on the photo: frosted sand. */
-[data-theme="summer"] .column-subplot {
+[data-theme="summer"] .column-subplot,
+[data-theme="summer"] .subplot-tile {
   background: rgb(246 238 220 / 0.88);
   border-color: rgb(246 238 220 / 0.6);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
@@ -761,6 +773,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 }
 [data-theme="sketch"] .card { border-left-width: 6px; }
 [data-theme="sketch"] .column,
+[data-theme="sketch"] .subplot-tile,
 [data-theme="sketch"] .dialog,
 [data-theme="sketch"] .add-subplot,
 [data-theme="sketch"] .tab.is-active {
@@ -777,6 +790,49 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 [data-theme="sketch"] body { font-size: 15.5px; }
 [data-theme="sketch"] .column-title,
 [data-theme="sketch"] .card-title { letter-spacing: 0.01em; }
+
+/* ------------------------------------------------------------- Cards view */
+
+/* One subplot as a column; the rest as cards in a grid that fills the rest. */
+.board[data-view="cards"] > .column-subplot { margin: 16px 0 16px 14px; max-height: calc(100% - 32px); }
+.subplot-grid {
+  flex: 1 1 auto; min-width: 480px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  align-content: start; gap: 14px;
+  padding: 16px; overflow-y: auto;
+}
+.subplot-grid .add-subplot { width: auto; height: auto; min-height: 120px; align-self: stretch; }
+
+.subplot-tile {
+  display: flex; flex-direction: column; min-width: 0;
+  padding: 10px 10px 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border); border-top: 4px solid var(--accent);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.subplot-tile:hover { box-shadow: var(--shadow-md); }
+.subplot-tile.is-drop-target { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
+.tile-head { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.tile-name {
+  flex: 1; min-width: 0; padding: 0; border: 0; background: none; text-align: left;
+  font: 600 15px/1.3 var(--font-serif);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+}
+.tile-chapters { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tile-chapter {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 8px 4px 6px;
+  border-left: 3px solid var(--state-color, var(--border));
+  border-radius: 6px; background: var(--surface);
+  font-size: 13px;
+}
+.tile-chapter.is-linked { box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent); }
+.tile-chapter-num { flex: none; min-width: 1.2em; color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile-chapter-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-chapter-ref { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tile-more, .tile-empty { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
 
 /* Column switcher: only shown on narrow screens (see Mobile below). */
 .column-nav { display: none; }
@@ -795,6 +851,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   .tab-name { max-width: 116px; height: 34px; padding-left: 10px; font-size: 13.5px; }
   .tab-close { width: 22px; margin-right: 4px; }
   .header-actions { gap: 0; }
+  .view-switch { display: none; }
   .save-status { display: none; }
   #data-btn { width: 34px; height: 34px; padding: 0; justify-content: center; border-color: transparent; background: none; color: var(--muted); }
   #data-btn .btn-label { display: none; }

@@ -29,6 +29,18 @@ You can also serve the folder with any static file server, for example
   highlight its other appearances.
 - **Chapter state.** Idea, Outlined, Drafting, Drafted, Revising or Done. Each
   state has a color, shown on the card's edge and in its label.
+- **Short description.** About one sentence per chapter, shown on its card
+  under the name. Longer **notes** go in the edit popup. A small note icon on
+  the card shows that a chapter has notes, and hovering it previews them.
+- **Columns or Cards (wide screens).** The switch in the header picks the board
+  layout:
+  - *Columns* shows every subplot as a column.
+  - *Cards* keeps one subplot as a column and collapses the others into a grid
+    of cards that list their chapters. Click a card to make it the column.
+  - Drop a chapter on a card to add it to that subplot at its place in the
+    outline. From another subplot, the drop moves it; hold Ctrl/⌘/Alt to copy.
+  - The layout, and which subplot is the column in each story, are remembered
+    in this browser.
 - **Undo / redo** for every change (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z).
 - **Themes:** Light, Dark, Summer Waves and Sketch, under Settings (gear icon).
   Until you pick one, the app follows your system's light/dark setting.
@@ -53,7 +65,7 @@ by the grip (⋮⋮) on its left.
 You can also use the keyboard. Focus a card and press **Enter** to edit it,
 **Alt+↑/↓** to move it, or **Delete** to remove it from the subplot it's in.
 
-Click a card to edit its name, state, summary and subplots. You can delete the
+Click a card to edit its name, short description, state, notes and subplots. You can delete the
 chapter from the same dialog.
 
 ## Storage
@@ -65,7 +77,7 @@ If you have the app open in more than one tab, they stay in sync.
 | Key | Contents |
 | --- | --- |
 | `storyOutlineTool.db` | Your stories (shape described at the top of [`js/store.js`](js/store.js)) |
-| `storyOutlineTool.settings` | Theme |
+| `storyOutlineTool.settings` | Theme, board layout, and which subplot is the column in Cards view |
 | `storyOutlineTool.sync` | Sync sign-in. For a sync key this includes the secret key itself |
 
 ## Data menu
@@ -154,7 +166,7 @@ How it works ([`js/sync.js`](js/sync.js)):
 index.html        page structure and popups
 css/styles.css    styles and themes
 js/theme-init.js  applies the saved theme before first paint
-js/settings.js    theme setting
+js/settings.js    theme and layout settings
 js/store.js       data model, localStorage persistence, undo/redo
 js/io.js          database import/export, Markdown export
 js/sync.js        encrypted Nostr sync

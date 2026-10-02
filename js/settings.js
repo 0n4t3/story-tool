@@ -51,12 +51,38 @@
     if (mq.addEventListener) mq.addEventListener('change', onChange);
   }
 
+  /** Board layout on wide screens: "columns" (every subplot a column) or "cards". */
+  function view() { return read().view === 'cards' ? 'cards' : 'columns'; }
+
+  function setView(v) {
+    var s = read();
+    s.view = v === 'cards' ? 'cards' : 'columns';
+    write(s);
+  }
+
+  /** In cards view, the subplot shown as a full column, per story tab. */
+  function focusedSubplot(tabId) {
+    var f = read().focus;
+    return f && typeof f[tabId] === 'string' ? f[tabId] : null;
+  }
+
+  function setFocusedSubplot(tabId, subplotId) {
+    var s = read();
+    s.focus = s.focus && typeof s.focus === 'object' ? s.focus : {};
+    s.focus[tabId] = subplotId;
+    write(s);
+  }
+
   global.SOT = global.SOT || {};
   global.SOT.settings = {
     SETTINGS_KEY: SETTINGS_KEY,
     THEMES: THEMES,
     theme: theme,
     setTheme: setTheme,
-    apply: apply
+    apply: apply,
+    view: view,
+    setView: setView,
+    focusedSubplot: focusedSubplot,
+    setFocusedSubplot: setFocusedSubplot
   };
 })(window);

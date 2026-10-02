@@ -7,6 +7,8 @@
  *
  * Lists are elements with a `data-list` attribute ("main" or "sub:<id>").
  * Cards are `.card` elements with a `data-chapter-id` attribute.
+ * Collapsed subplot cards (`.subplot-tile`, `data-drop="tile"`) also accept
+ * drops; they have no positions, so the drop is reported with `tile: true`.
  */
 (function (global) {
   'use strict';
@@ -111,18 +113,23 @@
     function listAt(x, y) {
       var el = document.elementFromPoint(x, y);
       if (!el || !board.contains(el)) return null;
+      var tile = el.closest('.subplot-tile');
+      if (tile) return tile;
       var column = el.closest('.column');
       return column ? column.querySelector('[data-list]') : null;
     }
+
+    /** The element to highlight for a drop target: its column, or the tile itself. */
+    function targetBox(list) { return list.closest('.column, .subplot-tile'); }
 
     function updateTarget() {
       var list = listAt(drag.x, drag.y);
       var src = drag.sourceList.dataset.list;
 
       if (list !== drag.targetList) {
-        if (drag.targetList) drag.targetList.closest('.column').classList.remove('is-drop-target');
+        if (drag.targetList) targetBox(drag.targetList).classList.remove('is-drop-target');
         drag.targetList = list;
-        if (list) list.closest('.column').classList.add('is-drop-target');
+        if (list) targetBox(list).classList.add('is-drop-target');
       }
 
       if (!list) {
@@ -134,6 +141,14 @@
       }
 
       var dst = list.dataset.list;
+      if (list.dataset.drop === 'tile') {
+        // A collapsed subplot: no positions to show, just highlight it.
+        drag.placeholder.remove();
+        drag.card.classList.remove('is-hidden');
+        drag.ghost.classList.toggle('is-copy', dst !== src && (src === 'main' || drag.copy));
+        drag.index = 0;
+        return;
+      }
       // Moving within the same list: hide the original so the gap shows its new spot.
       var sameList = dst === src;
       drag.card.classList.toggle('is-hidden', sameList);
@@ -166,7 +181,7 @@
 
       var dy = 0;
       var list = drag.targetList;
-      if (list) {
+      if (list && list.dataset.drop !== 'tile') {
         var r = list.getBoundingClientRect();
         if (drag.y < r.top + EDGE) dy = -speed(r.top + EDGE - drag.y);
         else if (drag.y > r.bottom - EDGE) dy = speed(drag.y - (r.bottom - EDGE));
@@ -187,7 +202,7 @@
       d.ghost.remove();
       d.placeholder.remove();
       d.card.classList.remove('is-drag-source', 'is-hidden');
-      if (d.targetList) d.targetList.closest('.column').classList.remove('is-drop-target');
+      if (d.targetList) targetBox(d.targetList).classList.remove('is-drop-target');
       document.body.classList.remove('is-dragging');
       suppressClick = true;
       setTimeout(function () { suppressClick = false; }, 0);
@@ -198,6 +213,7 @@
           from: d.sourceList.dataset.list,
           to: d.targetList.dataset.list,
           index: d.index,
+          tile: d.targetList.dataset.drop === 'tile',
           copy: d.copy
         });
       }
