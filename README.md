@@ -101,7 +101,9 @@ How it works ([`js/sync.js`](js/sync.js)):
 
 ## Settings
 
-- **Theme:** Light, Dark, Summer Waves, Sketch.
+- **Theme:** Light, Dark, Summer Waves, Sketch. Summer Waves is a copy of the
+  "Summer Waves" Ditto theme: its colours, font and photo
+  (`assets/summer-waves.jpg`).
 - **Delete data:** each option asks for confirmation first.
   - *Delete all data* erases the synced copy (if sync is on) and everything the
     app stores in this browser.
@@ -110,6 +112,7 @@ How it works ([`js/sync.js`](js/sync.js)):
     still signed in will upload their copy again the next time they sync.
   - *Delete local data* clears this browser's storage but stays signed in to
     sync, then downloads your synced stories again.
+- **Source:** links to this repository.
 
 ## Project layout
 
@@ -122,11 +125,12 @@ js/io.js          database import/export, Markdown export
 js/sync.js        encrypted Nostr sync
 js/drag.js        pointer-based drag and drop (mouse, pen, touch)
 js/app.js         rendering and UI behaviour
-vendor/           nostr-tools build and the Sketch theme's font (see vendor/README.md)
+assets/           Summer Waves background photo
+vendor/           nostr-tools build and theme fonts (see vendor/README.md)
 ```
 
 ## License
 
 GPL-3.0. See [LICENSE](LICENSE). Vendored nostr-tools is Unlicense (its
-bundled `@noble`/`@scure` dependencies are MIT). The Patrick Hand font is SIL
-OFL 1.1.
+bundled `@noble`/`@scure` dependencies are MIT). The Patrick Hand and Sorts
+Mill Goudy fonts are SIL OFL 1.1.

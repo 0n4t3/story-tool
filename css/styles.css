@@ -1,5 +1,21 @@
 /* Story Outline Tool */
 
+/* Summer Waves theme font (Sorts Mill Goudy, a.k.a. GoudyStM, SIL OFL 1.1, see vendor/fonts). */
+@font-face {
+  font-family: "GoudyStM";
+  src: url("../vendor/fonts/sorts-mill-goudy.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "GoudyStM";
+  src: url("../vendor/fonts/sorts-mill-goudy-italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* Handwriting font for the Sketch theme (Patrick Hand, SIL OFL 1.1, see vendor/fonts). */
 @font-face {
   font-family: "Patrick Hand";
@@ -95,34 +111,37 @@
   color-scheme: dark;
 }
 
-/* Summer Waves: sand, sea glass and a teal tide line. */
+/* Summer Waves: from the "Summer Waves" Ditto theme (background #f6eedc, text #1f2a33,
+   primary #56738c, GoudyStM / Sorts Mill Goudy, photo background in cover mode). */
 :root[data-theme="summer"] {
-  --bg: #fffaf0;
-  --board: #dff3f1;
-  --board-bg:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='140' viewBox='0 0 480 140'%3E%3Cpath d='M0 70 C80 45 160 45 240 70 S400 95 480 70 V140 H0Z' fill='%230b7f8c' fill-opacity='0.08'/%3E%3Cpath d='M0 100 C60 85 180 85 240 100 S420 115 480 100 V140 H0Z' fill='%230b7f8c' fill-opacity='0.10'/%3E%3C/svg%3E") repeat-x left bottom / 480px 140px,
-    linear-gradient(180deg, #e9f7f5 0%, #d6efec 70%, #f3e6cc 100%);
-  --header-bg: linear-gradient(90deg, #fffaf0 0%, #fff3df 100%);
-  --surface: #fffdf8;
-  --surface-2: #f0f9f7;
-  --border: #c7e1dc;
-  --border-strong: #9cc9c2;
-  --text: #143a40;
-  --muted: #557a7d;
-  --primary: #0b7f8c;
+  --bg: #f6eedc;
+  --board: #56738c;
+  /* The photo is portrait (1440x1920). On landscape screens `cover` crops it
+     top and bottom; 58% keeps the sky with its droplets, the horizon (about a
+     third of the way down) and the waves splashing in view. */
+  --board-bg: url("../assets/summer-waves.jpg") 50% 58% / cover no-repeat, #56738c;
+  --header-bg: #f6eedc;
+  --surface: #fbf7ee;
+  --surface-2: #f6eedc;
+  --border: #d8d3c4;
+  --border-strong: #bebbb0;
+  --text: #1f2a33;
+  --muted: #5a6670;
+  --primary: #56738c;
   --primary-text: #ffffff;
-  --danger: #d9480f;
-  --focus: #0b7f8c;
-  --shadow-sm: 0 1px 2px rgb(11 80 90 / 0.10), 0 1px 1px rgb(11 80 90 / 0.05);
-  --shadow-md: 0 6px 18px rgb(11 80 90 / 0.16), 0 2px 4px rgb(11 80 90 / 0.08);
-  --shadow-lg: 0 18px 40px rgb(8 60 70 / 0.24);
-  --state-idea: #7c9a9c;
-  --state-outlined: #1971c2;
-  --state-drafting: #e8590c;
-  --state-drafted: #9c36b5;
-  --state-revising: #d6336c;
-  --state-done: #2b8a3e;
-  --radius: 14px;
+  --danger: #b5462f;
+  --focus: #56738c;
+  --shadow-sm: 0 1px 2px rgb(31 42 51 / 0.10), 0 1px 1px rgb(31 42 51 / 0.05);
+  --shadow-md: 0 6px 18px rgb(31 42 51 / 0.18), 0 2px 4px rgb(31 42 51 / 0.08);
+  --shadow-lg: 0 18px 40px rgb(31 42 51 / 0.30);
+  --state-idea: #8b9198;
+  --state-outlined: #4f7cac;
+  --state-drafting: #c27a1e;
+  --state-drafted: #8c6bb1;
+  --state-revising: #c4566b;
+  --state-done: #4f8a5b;
+  --font: "GoudyStM", "Sorts Mill Goudy", "Goudy Old Style", Garamond, Georgia, serif;
+  --font-serif: var(--font);
   color-scheme: light;
 }
 
@@ -199,6 +218,7 @@ svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; s
   cursor: pointer; white-space: nowrap;
 }
 .btn:hover { background: var(--surface-2); }
+a.btn { text-decoration: none; }
 .btn svg { width: 16px; height: 16px; }
 .btn-small { height: 28px; padding: 0 10px; font-size: 13px; }
 .btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-text); font-weight: 600; }
@@ -657,7 +677,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
     linear-gradient(90deg, #dfe6f1 1px, transparent 1px) 0 0 / 8px 8px, var(--p0);
 }
 .theme-option[data-theme-option="sketch"] .theme-preview span { border: 1.5px solid #262626; box-shadow: 1px 1px 0 #262626; border-radius: 6px 2px 5px 2px; }
-.theme-option[data-theme-option="summer"] .theme-preview { background: linear-gradient(180deg, #e9f7f5, #cfeae6 70%, #f3e6cc); }
+.theme-option[data-theme-option="summer"] .theme-preview { background: url("../assets/summer-waves.jpg") 50% 70% / cover no-repeat, #56738c; }
+.theme-option[data-theme-option="summer"] .theme-name { font-family: "GoudyStM", "Sorts Mill Goudy", Georgia, serif; font-size: 14px; }
 
 .delete-list { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; }
 .delete-list .panel-text { margin: 0; }
@@ -697,6 +718,25 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 }
 .toast .btn { background: transparent; color: inherit; border-color: color-mix(in srgb, var(--bg) 40%, transparent); }
 .toast .btn:hover { background: color-mix(in srgb, var(--bg) 15%, transparent); }
+
+/* ------------------------------------------------------ Summer Waves theme */
+
+[data-theme="summer"] body { font-size: 15px; }
+/* Subplot columns and the "Add subplot" button sit on the photo: frosted sand. */
+[data-theme="summer"] .column-subplot {
+  background: rgb(246 238 220 / 0.88);
+  border-color: rgb(246 238 220 / 0.6);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+[data-theme="summer"] .add-subplot {
+  background: rgb(246 238 220 / 0.72);
+  border-color: rgb(246 238 220 / 0.95);
+  color: var(--text);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+[data-theme="summer"] .add-subplot:hover { background: rgb(246 238 220 / 0.9); }
+[data-theme="summer"] .column-main { border-color: rgb(246 238 220 / 0.6); }
+[data-theme="summer"] .tab.is-active { background: var(--primary); border-color: var(--primary); color: var(--primary-text); }
 
 /* ------------------------------------------------------------ Sketch theme */
 

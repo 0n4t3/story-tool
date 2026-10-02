@@ -26,3 +26,12 @@ Then put the header comment from the current file back at the top.
 Wagesreiter, Latin subset, from `@fontsource/patrick-hand`. Licensed under the
 SIL Open Font License 1.1 ([`fonts/patrick-hand-OFL.txt`](fonts/patrick-hand-OFL.txt)).
 The Sketch theme uses it.
+
+## fonts/sorts-mill-goudy*.woff2
+
+[Sorts Mill Goudy](https://github.com/theleagueof/sorts-mill-goudy) by Barry
+Schwartz, regular and italic, Latin subset, from `@fontsource/sorts-mill-goudy`.
+It's the font that Ditto's "Summer Waves" theme calls "GoudyStM webfont".
+Licensed under the SIL Open Font License 1.1
+([`fonts/sorts-mill-goudy-OFL.txt`](fonts/sorts-mill-goudy-OFL.txt)). The
+Summer Waves theme uses it.
