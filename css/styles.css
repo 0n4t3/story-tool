@@ -199,6 +199,7 @@ svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; s
   cursor: pointer; white-space: nowrap;
 }
 .btn:hover { background: var(--surface-2); }
+a.btn { text-decoration: none; }
 .btn svg { width: 16px; height: 16px; }
 .btn-small { height: 28px; padding: 0 10px; font-size: 13px; }
 .btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-text); font-weight: 600; }

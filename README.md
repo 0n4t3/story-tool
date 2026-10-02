@@ -110,6 +110,7 @@ How it works ([`js/sync.js`](js/sync.js)):
     still signed in will upload their copy again the next time they sync.
   - *Delete local data* clears this browser's storage but stays signed in to
     sync, then downloads your synced stories again.
+- **Source:** links to this repository.
 
 ## Project layout
 
