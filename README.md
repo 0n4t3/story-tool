@@ -1,7 +1,8 @@
 # Story Outline Tool
 
 A small, fully local web app for outlining a story's chapters and subplots.
-It's plain HTML, CSS and JavaScript: no build step, no server, no dependencies.
+It's plain HTML, CSS and JavaScript, with no build step and no server. The
+only libraries are vendored in `vendor/`.
 
 ## Running it
 
@@ -28,6 +29,8 @@ You can also serve the folder with any static file server, for example
 - **Chapter state.** Idea, Outlined, Drafting, Drafted, Revising or Done. Each
   state has a color, shown on the card's edge and in its label.
 - **Undo / redo** for every change (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z).
+- **Themes:** Light, Dark, Summer Waves and Sketch, under Settings (gear icon).
+  Until you pick one, the app follows your system's light/dark setting.
 
 ### Moving chapters
 
@@ -50,34 +53,80 @@ chapter from the same dialog.
 
 ## Storage
 
-Everything is saved automatically to the browser's `localStorage` under the key
-`storyOutlineTool.db`. The data stays in the browser and profile you used.
-Clearing site data deletes it. If you have the app open in more than one tab,
-they stay in sync.
+Everything is saved automatically to the browser's `localStorage`. The data
+stays in the browser and profile you used, and clearing site data deletes it.
+If you have the app open in more than one tab, they stay in sync.
 
-The data model is described at the top of [`js/store.js`](js/store.js).
+| Key | Contents |
+| --- | --- |
+| `storyOutlineTool.db` | Your stories (shape described at the top of [`js/store.js`](js/store.js)) |
+| `storyOutlineTool.settings` | Theme |
+| `storyOutlineTool.sync` | Sync sign-in. For a sync key this includes the secret key itself |
 
-## Planned (not yet implemented)
+## Data menu
 
-These appear in the **Data** menu as "Soon". Stubs that describe the intended
-behaviour are in [`js/io.js`](js/io.js).
+- **Import / Export database:** Export downloads every story as a `.json` file.
+  Import loads one of those files. It first warns that all local data will be
+  destroyed and replaced. Imports can be undone right after. Exports never
+  contain your sync key.
+- **Sync:** see below.
+- **Export as Markdown:** downloads the current story as a readable `.md` file
+  for printing or a notes app. It can't be imported back.
 
-- Download the database as a file, and upload it again to restore.
-- Export a human-readable Markdown outline for notes apps or printing.
-- Back up and sync using end-to-end encrypted, app-specific data on Nostr
-  relays.
+## Sync
+
+Sync is optional. It uses [Nostr](https://nostr.org/) relays as storage and
+encrypts everything end to end with NIP-44, so relays only ever see ciphertext.
+There's no server of our own.
+
+- **Generate Sync Key:** makes a new Nostr secret key (`nsec1…`) and shows it
+  once. Save it. It can't be recovered or reset.
+- **Enter Sync Key:** paste an existing `nsec1…` to sync another device.
+- **Sign in with Nostr:** use a NIP-07 browser extension (it must support
+  NIP-44), or paste a NIP-46 `bunker://` address from a remote signer.
+
+How it works ([`js/sync.js`](js/sync.js)):
+
+- Each story is one NIP-78 application-data event (kind `30078`, `d` tag
+  `story-outline-tool/tab/<id>`). Its content is gzipped, then encrypted to your
+  own key.
+- An index event (`story-outline-tool/index`) holds the story order and the
+  list of deleted stories.
+- Changes sync about 3 seconds after you stop editing, when the page regains
+  focus, and every 90 seconds while it's visible.
+- Merging works per story: the most recently edited version wins. A deletion
+  wins over edits made before it.
+- Default relays are `relay.damus.io`, `nos.lol`, `relay.primal.net` and
+  `offchain.pub`. You can change them in the Sync popup once sync is on.
+
+## Settings
+
+- **Theme:** Light, Dark, Summer Waves, Sketch.
+- **Delete data:** each option asks for confirmation first.
+  - *Delete all data* erases the synced copy (if sync is on) and everything the
+    app stores in this browser.
+  - *Delete synced data* erases the synced copy from the relays and stops
+    syncing on this device. Local stories are kept. Other devices that are
+    still signed in will upload their copy again the next time they sync.
+  - *Delete local data* clears this browser's storage but stays signed in to
+    sync, then downloads your synced stories again.
 
 ## Project layout
 
 ```
-index.html        page structure and dialogs
-css/styles.css    styles (light and dark themes)
+index.html        page structure and popups
+css/styles.css    styles and themes
+js/settings.js    theme setting
 js/store.js       data model, localStorage persistence, undo/redo
+js/io.js          database import/export, Markdown export
+js/sync.js        encrypted Nostr sync
 js/drag.js        pointer-based drag and drop (mouse, pen, touch)
 js/app.js         rendering and UI behaviour
-js/io.js          placeholders for import/export and Nostr sync
+vendor/           nostr-tools build and the Sketch theme's font (see vendor/README.md)
 ```
 
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE). Vendored nostr-tools is Unlicense (its
+bundled `@noble`/`@scure` dependencies are MIT). The Patrick Hand font is SIL
+OFL 1.1.
