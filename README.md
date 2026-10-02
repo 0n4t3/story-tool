@@ -32,13 +32,21 @@ You can also serve the folder with any static file server, for example
 - **Short description.** About one sentence per chapter, shown on its card
   under the name. Longer **notes** go in the edit popup. A small note icon on
   the card shows that a chapter has notes, and hovering it previews them.
-- **Columns or Cards (wide screens).** The switch in the header picks the board
-  layout:
+- **Columns, Cards or Matrix (wide screens).** The switch in the header picks
+  the board layout:
   - *Columns* shows every subplot as a column.
   - *Cards* keeps one subplot as a column and collapses the others into a grid
     of cards that list their chapters. Click a card to make it the column.
-  - Drop a chapter on a card to add it to that subplot at its place in the
+    Drop a chapter on a card to add it to that subplot at its place in the
     outline. From another subplot, the drop moves it; hold Ctrl/⌘/Alt to copy.
+  - *Matrix* shows only the chronological outline, as a snake of cards with
+    arrows between them.
+    - The first row reads left to right. A down arrow leads to the next row,
+      which reads right to left, and so on.
+    - How many cards fit in a row depends on the window width.
+    - Cards show the same details as everywhere else.
+    - Drag a card to reorder; a bar shows where it will land. Alt+↑/↓ works
+      too.
   - The layout, and which subplot is the column in each story, are remembered
     in this browser.
 - **Undo / redo** for every change (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z).
@@ -77,7 +85,7 @@ If you have the app open in more than one tab, they stay in sync.
 | Key | Contents |
 | --- | --- |
 | `storyOutlineTool.db` | Your stories (shape described at the top of [`js/store.js`](js/store.js)) |
-| `storyOutlineTool.settings` | Theme, board layout, and which subplot is the column in Cards view |
+| `storyOutlineTool.settings` | Theme, board layout (Columns/Cards/Matrix), and which subplot is the column in Cards view |
 | `storyOutlineTool.sync` | Sync sign-in. For a sync key this includes the secret key itself |
 
 ## Data menu

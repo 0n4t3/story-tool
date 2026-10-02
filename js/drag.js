@@ -9,6 +9,8 @@
  * Cards are `.card` elements with a `data-chapter-id` attribute.
  * Collapsed subplot cards (`.subplot-tile`, `data-drop="tile"`) also accept
  * drops; they have no positions, so the drop is reported with `tile: true`.
+ * The matrix view (`data-layout="matrix"`) is a 2-D snake: instead of a gap,
+ * the drop position is shown as a bar before or after the nearest card.
  */
 (function (global) {
   'use strict';
@@ -115,16 +117,53 @@
       if (!el || !board.contains(el)) return null;
       var tile = el.closest('.subplot-tile');
       if (tile) return tile;
+      var matrix = el.closest('[data-layout="matrix"]');
+      if (matrix) return matrix;
       var column = el.closest('.column');
       return column ? column.querySelector('[data-list]') : null;
     }
 
     /** The element to highlight for a drop target: its column, or the tile itself. */
-    function targetBox(list) { return list.closest('.column, .subplot-tile'); }
+    function targetBox(list) { return list.closest('.column, .subplot-tile, .matrix') || list; }
+
+    function clearMarker() {
+      if (drag && drag.marker) {
+        drag.marker.classList.remove('drop-left', 'drop-right');
+        drag.marker = null;
+      }
+    }
+
+    /** Matrix drop position: before or after the card nearest the pointer, in story order. */
+    function matrixTarget(list) {
+      drag.placeholder.remove();
+      drag.card.classList.remove('is-hidden');
+      drag.ghost.classList.remove('is-copy');
+      var cards = Array.prototype.filter.call(list.querySelectorAll('.card'), function (c) { return c !== drag.card; });
+      if (!cards.length) { drag.index = 0; return; }
+      var best = 0;
+      var bestDist = Infinity;
+      cards.forEach(function (c, i) {
+        var r = c.getBoundingClientRect();
+        var dx = Math.max(r.left - drag.x, 0, drag.x - r.right);
+        var dy = Math.max(r.top - drag.y, 0, drag.y - r.bottom);
+        var dist = dx * dx + 4 * dy * dy; // prefer the pointer's own row
+        if (dist < bestDist) { bestDist = dist; best = i; }
+      });
+      var card = cards[best];
+      var r = card.getBoundingClientRect();
+      var reversed = !!card.closest('.is-reversed');
+      var before = reversed ? drag.x > r.left + r.width / 2 : drag.x < r.left + r.width / 2;
+      drag.index = best + (before ? 0 : 1);
+      // The bar goes on the side of the card that faces the drop position on screen.
+      var leftSide = before !== reversed;
+      card.classList.add(leftSide ? 'drop-left' : 'drop-right');
+      drag.marker = card;
+    }
 
     function updateTarget() {
       var list = listAt(drag.x, drag.y);
       var src = drag.sourceList.dataset.list;
+      clearMarker();
 
       if (list !== drag.targetList) {
         if (drag.targetList) targetBox(drag.targetList).classList.remove('is-drop-target');
@@ -141,6 +180,7 @@
       }
 
       var dst = list.dataset.list;
+      if (list.dataset.layout === 'matrix') { matrixTarget(list); return; }
       if (list.dataset.drop === 'tile') {
         // A collapsed subplot: no positions to show, just highlight it.
         drag.placeholder.remove();
@@ -196,6 +236,7 @@
     }
 
     function finish(commit) {
+      clearMarker();
       var d = drag;
       drag = null;
       cancelAnimationFrame(d.raf);

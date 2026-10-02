@@ -834,6 +834,53 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .tile-chapter-ref { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .tile-more, .tile-empty { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
 
+/* ------------------------------------------------------------ Matrix view */
+
+/* The outline only, as a snake: rows alternate direction, joined by arrows. */
+.matrix {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column;
+  margin: 16px; max-height: calc(100% - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-md);
+}
+.matrix-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 14px 24px 12px; border-bottom: 1px solid var(--border);
+}
+.matrix-header .quick-add { width: min(360px, 100%); }
+.matrix-snake {
+  flex: 1 1 auto; overflow-y: auto; overscroll-behavior-y: contain;
+  padding: 20px 24px 24px;
+  --row-width: calc(var(--per-row) * var(--matrix-card) + (var(--per-row) - 1) * var(--matrix-arrow));
+}
+.matrix-row {
+  display: flex; align-items: stretch;
+  width: var(--row-width); max-width: 100%; margin-inline: auto;
+}
+.matrix-row.is-reversed { flex-direction: row-reverse; }
+.matrix-row > .card { flex: 0 0 var(--matrix-card); width: var(--matrix-card); }
+.matrix-arrow { display: grid; place-items: center; color: var(--muted); }
+.matrix-arrow svg { width: 22px; height: 22px; stroke-width: 2; }
+.matrix-row > .matrix-arrow { flex: 0 0 var(--matrix-arrow); }
+.matrix-row.is-reversed > .matrix-arrow svg { transform: rotate(180deg); }
+/* Turn: a down arrow under the row's last card (right end, or left end when reversed). */
+.matrix-turn { display: flex; justify-content: flex-end; width: var(--row-width); max-width: 100%; height: 36px; margin-inline: auto; }
+.matrix-turn.is-reversed { justify-content: flex-start; }
+.matrix-turn .matrix-arrow { width: var(--matrix-card); }
+.matrix-empty { margin: 0; color: var(--muted); }
+/* Where a dragged chapter will land. */
+.card.drop-left, .card.drop-right { position: relative; }
+.card.drop-left::before, .card.drop-right::before {
+  content: ""; position: absolute; top: 4px; bottom: 4px; width: 4px;
+  border-radius: 2px; background: var(--primary);
+}
+.card.drop-left::before { left: calc(var(--matrix-arrow, 16px) / -2 - 2px); }
+.card.drop-right::before { right: calc(var(--matrix-arrow, 16px) / -2 - 2px); }
+[data-theme="summer"] .matrix { background: rgb(246 238 220 / 0.9); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border-color: rgb(246 238 220 / 0.6); }
+[data-theme="sketch"] .matrix { border-width: 2px; border-radius: var(--wobble-alt); }
+
 /* Column switcher: only shown on narrow screens (see Mobile below). */
 .column-nav { display: none; }
 

@@ -315,6 +315,12 @@
       btn.setAttribute('aria-pressed', btn.dataset.view === settings.view() ? 'true' : 'false');
     });
 
+    if (view === 'matrix') {
+      board.appendChild(renderMatrix(tab, memberOf));
+      renderColumnNav(tab);
+      return;
+    }
+
     board.appendChild(renderMainColumn(tab, memberOf));
 
     var addButton = h('button', {
@@ -414,7 +420,7 @@
     btn.addEventListener('click', function () {
       settings.setView(btn.dataset.view);
       render();
-      announce(btn.dataset.view === 'cards' ? 'Cards view' : 'Columns view');
+      announce({ cards: 'Cards view', matrix: 'Matrix view' }[btn.dataset.view] || 'Columns view');
     });
   });
 
@@ -516,6 +522,85 @@
       h('footer', { class: 'column-footer' }, [quickAdd(tab, null)])
     ]);
   }
+
+  // --- Matrix view (wide screens) ------------------------------------------
+
+  var MATRIX_CARD = 264;  // card width, px
+  var MATRIX_ARROW = 40;  // space for the arrow between cards
+  var MATRIX_PAD = 24;    // padding inside the matrix panel
+
+  /** How many cards fit in one row of the matrix at the current board width. */
+  function matrixPerRow() {
+    var avail = board.clientWidth - 2 * (16 + MATRIX_PAD);
+    return Math.max(1, Math.floor((avail + MATRIX_ARROW) / (MATRIX_CARD + MATRIX_ARROW)));
+  }
+
+  function arrow(direction) {
+    var paths = {
+      right: '<path d="M3 10h13M11 5l5 5-5 5"/>',
+      down: '<path d="M10 3v13M5 11l5 5 5-5"/>'
+    };
+    return h('span', { class: 'matrix-arrow matrix-arrow-' + direction, 'aria-hidden': 'true' }, [icon(paths[direction])]);
+  }
+
+  /**
+   * The chronological outline as a snake: rows alternate left-to-right and
+   * right-to-left, with a down arrow where one row turns into the next. The
+   * DOM keeps chronological order (reversed rows use row-reverse), so reading
+   * and keyboard order follow the story.
+   */
+  function renderMatrix(tab, memberOf) {
+    var perRow = matrixPerRow();
+    var done = tab.order.filter(function (id) { return tab.chapters[id].state === 'done'; }).length;
+    var summary = plural(tab.order.length, 'chapter') + (tab.order.length ? ' · ' + done + ' done' : '');
+
+    var snake = h('div', {
+      class: 'matrix-snake', 'data-list': 'main', 'data-layout': 'matrix',
+      'aria-label': 'Chronological outline', role: 'list',
+      style: '--per-row:' + perRow + ';--matrix-card:' + MATRIX_CARD + 'px;--matrix-arrow:' + MATRIX_ARROW + 'px'
+    });
+
+    var rows = Math.ceil(tab.order.length / perRow);
+    for (var r = 0; r < rows; r++) {
+      var reversed = r % 2 === 1;
+      var ids = tab.order.slice(r * perRow, (r + 1) * perRow);
+      var row = h('div', { class: 'matrix-row' + (reversed ? ' is-reversed' : ''), role: 'presentation' });
+      ids.forEach(function (id, j) {
+        var i = r * perRow + j;
+        row.appendChild(renderCard(tab, tab.chapters[id], { list: 'main', number: String(i + 1), tags: memberOf[id] || [] }));
+        if (j < ids.length - 1) row.appendChild(arrow('right'));
+      });
+      snake.appendChild(row);
+      if (r < rows - 1) {
+        // The turn: under the last card of this row, which is at the right end
+        // of a left-to-right row and the left end of a right-to-left one.
+        snake.appendChild(h('div', { class: 'matrix-turn' + (reversed ? ' is-reversed' : ''), 'aria-hidden': 'true' }, [arrow('down')]));
+      }
+    }
+    if (!tab.order.length) snake.appendChild(h('p', { class: 'matrix-empty', text: 'No chapters yet. Add your first one above.' }));
+
+    return h('section', { class: 'matrix', 'aria-labelledby': 'matrix-title' }, [
+      h('header', { class: 'matrix-header' }, [
+        h('div', {}, [
+          h('h2', { class: 'column-title', id: 'matrix-title', text: 'Chronological outline' }),
+          h('div', { class: 'column-sub', text: summary })
+        ]),
+        quickAdd(tab, null)
+      ]),
+      snake
+    ]);
+  }
+
+  // Re-flow the matrix when the window size changes the number of cards per row.
+  var matrixResizeTimer = 0;
+  window.addEventListener('resize', function () {
+    if (board.dataset.view !== 'matrix') return;
+    clearTimeout(matrixResizeTimer);
+    matrixResizeTimer = setTimeout(function () {
+      var snake = board.querySelector('.matrix-snake');
+      if (snake && Number(snake.style.getPropertyValue('--per-row')) !== matrixPerRow()) render();
+    }, 120);
+  });
 
   function renderSubplotColumn(tab, sp, index) {
     var listKey = 'sub:' + sp.id;
