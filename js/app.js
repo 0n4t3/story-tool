@@ -240,6 +240,7 @@
     $('undo-btn').disabled = !store.canUndo();
     $('redo-btn').disabled = !store.canRedo();
     updateSaveStatus();
+    renderSelectionBar();
 
     document.title = store.activeTab().name + ' — Story Outline Tool';
   }
@@ -298,6 +299,8 @@
 
   function renderBoard() {
     var tab = store.activeTab();
+    if (board.dataset.tabId !== tab.id) selection = { list: null, ids: [], anchor: null };
+    pruneSelection(tab);
     board.textContent = '';
     board.dataset.tabId = tab.id;
 
@@ -694,11 +697,13 @@
       ': ' + ch.name + ', ' + STATE_LABELS[ch.state] +
       (ctx.tags && ctx.tags.length ? ', subplots: ' + ctx.tags.map(function (sp) { return sp.name; }).join(', ') : '');
 
+    var selected = isSelected(ctx.list, ch.id);
     return h('li', {
-      class: 'card', tabindex: '0', role: 'button', 'aria-label': label,
-      'aria-keyshortcuts': 'Enter Alt+ArrowUp Alt+ArrowDown',
+      class: 'card' + (selected ? ' is-selected' : ''), tabindex: '0', role: 'button',
+      'aria-label': label + (selected ? ' (selected)' : ''),
+      'aria-keyshortcuts': 'Enter Control+Space Alt+ArrowUp Alt+ArrowDown',
       dataset: { chapterId: ch.id, state: ch.state, focusKey: 'card:' + ctx.list + ':' + ch.id },
-      onclick: function () { openChapterDialog(tab.id, ch.id); },
+      onclick: function (e) { cardClick(e, tab, ch, ctx); },
       onkeydown: function (e) { cardKeydown(e, tab, ch, ctx); }
     }, [
       h('span', { class: 'card-grip', title: 'Drag to move' }, [icon(ICONS.grip)]),
@@ -782,6 +787,11 @@
 
   function cardKeydown(e, tab, ch, ctx) {
     if (e.target !== e.currentTarget) return;
+    if (e.key === ' ' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleSelect(ctx.list, ch.id);
+      return;
+    }
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       openChapterDialog(tab.id, ch.id);
@@ -790,6 +800,14 @@
     if (ctx.subplotId && (e.key === 'Delete' || e.key === 'Backspace')) {
       e.preventDefault();
       var next = e.currentTarget.nextElementSibling || e.currentTarget.previousElementSibling;
+      if (isSelected(ctx.list, ch.id) && selection.ids.length > 1) {
+        var group = selectedInOrder(tab);
+        var sub = store.getSubplot(tab.id, ctx.subplotId);
+        clearSelection();
+        store.removeFromSubplot(tab.id, ctx.subplotId, group);
+        undoToast('Removed ' + group.length + ' chapters from ' + (sub ? sub.name : 'subplot'));
+        return;
+      }
       removeFromSubplot(tab, ctx.subplotId, ch);
       if (next && next.dataset.focusKey) {
         var el = document.querySelector('[data-focus-key="' + CSS.escape(next.dataset.focusKey) + '"]');
@@ -800,6 +818,12 @@
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
       var delta = e.key === 'ArrowUp' ? -1 : 1;
+      if (isSelected(ctx.list, ch.id) && selection.ids.length > 1) {
+        // Move the whole selection one step, keeping its order.
+        store.shiftChapters(tab.id, selectedInOrder(tab), delta, ctx.subplotId || null);
+        announce('Moved ' + selection.ids.length + ' chapters ' + (delta < 0 ? 'up' : 'down'));
+        return;
+      }
       if (ctx.subplotId) {
         var sp = store.getSubplot(tab.id, ctx.subplotId);
         var to = sp.chapterIds.indexOf(ch.id) + delta;
@@ -817,26 +841,142 @@
 
   function handleDrop(d) {
     var tab = store.activeTab();
-    var ch = tab.chapters[d.chapterId];
-    if (!ch) return;
+    var ids = d.chapterIds.filter(function (id) { return tab.chapters[id]; });
+    if (!ids.length) return;
+    var what = ids.length === 1 ? '“' + tab.chapters[ids[0]].name + '”' : ids.length + ' chapters';
+    // A group moved to another column stays selected there; a single card doesn't start a selection.
+    var keep = ids.length > 1;
+
     if (d.to === 'main') {
-      store.moveChapter(tab.id, d.chapterId, d.index);
-      announce('Moved “' + ch.name + '” to chapter ' + (d.index + 1));
+      store.moveChapter(tab.id, ids, d.index);
+      if (keep) setSelection('main', ids);
+      announce('Moved ' + what + ' to chapter ' + (d.index + 1));
       return;
     }
     var toId = d.to.slice(4);
     var fromId = d.from.indexOf('sub:') === 0 ? d.from.slice(4) : null;
     var sp = store.getSubplot(tab.id, toId);
-    var wasIn = sp && sp.chapterIds.indexOf(d.chapterId) >= 0;
+    var wasIn = sp && ids.every(function (id) { return sp.chapterIds.indexOf(id) >= 0; });
     if (d.tile) {
-      // Dropped on a collapsed subplot card: it goes in at its place in the outline order.
-      store.addToSubplot(tab.id, toId, d.chapterId, d.copy ? null : fromId);
-      if (sp) announce(wasIn ? '“' + ch.name + '” is already in ' + sp.name : 'Added “' + ch.name + '” to ' + sp.name);
+      // Dropped on a collapsed subplot card: each goes in at its place in the outline order.
+      store.addToSubplot(tab.id, toId, ids, d.copy ? null : fromId);
+      clearSelection();
+      if (sp) announce(wasIn ? 'Already in ' + sp.name : 'Added ' + what + ' to ' + sp.name);
       return;
     }
-    // Between subplots a drag moves the chapter; hold Ctrl/⌘/Alt to copy it instead.
-    store.placeInSubplot(tab.id, toId, d.chapterId, d.index, d.copy ? null : fromId);
-    if (sp) announce((wasIn ? 'Moved “' : 'Added “') + ch.name + '” in ' + sp.name);
+    // Between subplots a drag moves; hold Ctrl/⌘/Alt to copy instead.
+    store.placeInSubplot(tab.id, toId, ids, d.index, d.copy ? null : fromId);
+    if (keep) setSelection(d.to, ids);
+    if (sp) announce((wasIn ? 'Moved ' : 'Added ') + what + ' in ' + sp.name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Multi-selection: Ctrl/⌘+click (or Ctrl+Space) toggles a card, Shift+click
+  // selects a range. A selection lives in one list (the outline or one subplot)
+  // and is dragged, or moved with Alt+↑/↓, as a group.
+
+  var selection = { list: null, ids: [], anchor: null };
+  var dragApi = null;
+
+  function listIds(tab, listKey) {
+    if (listKey === 'main') return tab.order;
+    var sp = listKey ? store.getSubplot(tab.id, listKey.slice(4)) : null;
+    return sp ? sp.chapterIds : [];
+  }
+
+  function isSelected(listKey, id) { return selection.list === listKey && selection.ids.indexOf(id) >= 0; }
+
+  /** The selected ids in the order they appear in their list. */
+  function selectedInOrder(tab) {
+    return listIds(tab, selection.list).filter(function (id) { return selection.ids.indexOf(id) >= 0; });
+  }
+
+  function setSelection(listKey, ids, anchor) {
+    selection = { list: ids.length ? listKey : null, ids: ids.slice(), anchor: anchor || ids[ids.length - 1] || null };
+    refreshSelection();
+  }
+
+  function clearSelection() {
+    if (selection.ids.length) setSelection(null, []);
+  }
+
+  function toggleSelect(listKey, id) {
+    var ids = selection.list === listKey ? selection.ids.slice() : [];
+    var i = ids.indexOf(id);
+    if (i >= 0) ids.splice(i, 1); else ids.push(id);
+    setSelection(listKey, ids, id);
+    announce(ids.length ? ids.length + ' selected' : 'Selection cleared');
+  }
+
+  function rangeSelect(tab, listKey, id) {
+    var all = listIds(tab, listKey);
+    var anchor = selection.list === listKey && selection.anchor ? selection.anchor : id;
+    var a = all.indexOf(anchor);
+    var b = all.indexOf(id);
+    if (a < 0) a = b;
+    var range = all.slice(Math.min(a, b), Math.max(a, b) + 1);
+    var base = selection.list === listKey ? selection.ids : [];
+    var ids = base.concat(range.filter(function (x) { return base.indexOf(x) < 0; }));
+    setSelection(listKey, ids, anchor);
+    announce(ids.length + ' selected');
+  }
+
+  /** Drop ids that are no longer in the selected list (after edits, undo, sync…). */
+  function pruneSelection(tab) {
+    if (!selection.list) return;
+    var all = listIds(tab, selection.list);
+    selection.ids = selection.ids.filter(function (id) { return all.indexOf(id) >= 0; });
+    if (!selection.ids.length) selection = { list: null, ids: [], anchor: null };
+  }
+
+  /** Update the selected look of cards in place (no full re-render). */
+  function refreshSelection() {
+    board.querySelectorAll('.card').forEach(function (card) {
+      var list = card.closest('[data-list]');
+      card.classList.toggle('is-selected', !!list && isSelected(list.dataset.list, card.dataset.chapterId));
+    });
+    renderSelectionBar();
+  }
+
+  function renderSelectionBar() {
+    var bar = $('selection-bar');
+    var n = selection.ids.length;
+    bar.hidden = n === 0;
+    document.body.classList.toggle('has-selection', n > 0);
+    if (!n) return;
+    var tab = store.activeTab();
+    var where = selection.list === 'main' ? 'the outline' : (store.getSubplot(tab.id, selection.list.slice(4)) || { name: 'a subplot' }).name;
+    $('selection-count').textContent = plural(n, 'chapter') + ' selected in ' + where;
+  }
+
+  function cardClick(e, tab, ch, ctx) {
+    if (e.ctrlKey || e.metaKey) { toggleSelect(ctx.list, ch.id); return; }
+    if (e.shiftKey) { rangeSelect(tab, ctx.list, ch.id); return; }
+    clearSelection();
+    openChapterDialog(tab.id, ch.id);
+  }
+
+  $('selection-clear').addEventListener('click', clearSelection);
+
+  // Clicking empty space on the board clears the selection.
+  board.addEventListener('click', function (e) {
+    if (!e.target.closest('.card, button, input, select, textarea, a, .subplot-tile')) clearSelection();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || !selection.ids.length || e.defaultPrevented) return;
+    if (document.querySelector('dialog[open]') || openMenuEl || (dragApi && dragApi.isDragging())) return;
+    clearSelection();
+  });
+
+  /** Which chapters a drag starting on `card` carries: the selection if the card is in it. */
+  function dragIds(card) {
+    var list = card.closest('[data-list]');
+    var key = list ? list.dataset.list : null;
+    var id = card.dataset.chapterId;
+    if (isSelected(key, id) && selection.ids.length > 1) return selectedInOrder(store.activeTab());
+    if (!isSelected(key, id)) clearSelection();
+    return [id];
   }
 
   // ---------------------------------------------------------------------------
@@ -1327,6 +1467,6 @@
   store.init();
   store.subscribe(function () { closeMenu(); render(); });
   sync.init();
-  global.SOT.initDrag(board, { onDrop: handleDrop });
+  dragApi = global.SOT.initDrag(board, { onDrop: handleDrop, dragIds: dragIds });
   render();
 })(window);

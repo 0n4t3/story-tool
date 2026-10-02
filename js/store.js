@@ -284,6 +284,37 @@
     arr.splice(clamp(toIndex, 0, arr.length), 0, item);
   }
 
+  /** One id or a list of ids, as a list without duplicates. */
+  function idList(ids) {
+    return [].concat(ids).filter(function (id, i, all) { return typeof id === 'string' && all.indexOf(id) === i; });
+  }
+
+  /**
+   * Move several items together: take them out of `arr` and put them back as
+   * one block, in the given order, at `toIndex` (an index among the items left).
+   */
+  function moveBlock(arr, items, toIndex) {
+    var rest = arr.filter(function (x) { return items.indexOf(x) < 0; });
+    var at = clamp(toIndex, 0, rest.length);
+    return rest.slice(0, at).concat(items, rest.slice(at));
+  }
+
+  /**
+   * Move each of `items` one step (delta -1 or +1), keeping their relative
+   * order; items already at the edge, or blocked by another moving item, stay.
+   */
+  function shiftItems(arr, items, delta) {
+    var out = arr.slice();
+    var idx = out.map(function (x, i) { return items.indexOf(x) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; });
+    if (delta > 0) idx.reverse();
+    idx.forEach(function (i) {
+      var j = i + delta;
+      if (j < 0 || j >= out.length || items.indexOf(out[j]) >= 0) return;
+      var tmp = out[j]; out[j] = out[i]; out[i] = tmp;
+    });
+    return out;
+  }
+
   /** Index at which `chapterId` should go in a subplot to respect chronological order. */
   function chronologicalSlot(tab, sp, chapterId) {
     var pos = tab.order.indexOf(chapterId);
@@ -450,9 +481,26 @@
     },
 
     /** Move a chapter within the chronological outline. `toIndex` is its final position. */
-    moveChapter: function (tabId, chapterId, toIndex) {
+    moveChapter: function (tabId, chapterIds, toIndex) {
       onTab(tabId, function (tab) {
-        if (tab.chapters[chapterId]) moveInArray(tab.order, chapterId, toIndex);
+        var ids = idList(chapterIds).filter(function (id) { return tab.chapters[id]; });
+        if (ids.length) tab.order = moveBlock(tab.order, ids, toIndex);
+      });
+    },
+
+    /**
+     * Move chapters one step up (-1) or down (+1) in the outline, or in a
+     * subplot when `subplotId` is given. All selected chapters move together.
+     */
+    shiftChapters: function (tabId, chapterIds, delta, subplotId) {
+      onTab(tabId, function (tab) {
+        var ids = idList(chapterIds);
+        if (subplotId) {
+          var sp = subplotById(tab, subplotId);
+          if (sp) sp.chapterIds = shiftItems(sp.chapterIds, ids, delta);
+        } else {
+          tab.order = shiftItems(tab.order, ids, delta);
+        }
       });
     },
 
@@ -493,42 +541,45 @@
     },
 
     /**
-     * Put a chapter at `toIndex` in a subplot (reordering it if it is already
-     * there). If `fromSubplotId` names a different subplot, the chapter is
-     * removed from that one, i.e. it is moved rather than copied.
+     * Put one or more chapters at `toIndex` in a subplot, as a block
+     * (reordering any already there). If `fromSubplotId` names a different
+     * subplot, they are removed from that one, i.e. moved rather than copied.
      */
-    placeInSubplot: function (tabId, spId, chapterId, toIndex, fromSubplotId) {
+    placeInSubplot: function (tabId, spId, chapterIds, toIndex, fromSubplotId) {
       onTab(tabId, function (tab) {
         var sp = subplotById(tab, spId);
-        if (!sp || !tab.chapters[chapterId]) return;
-        moveInArray(sp.chapterIds, chapterId, toIndex);
+        var ids = idList(chapterIds).filter(function (id) { return tab.chapters[id]; });
+        if (!sp || !ids.length) return;
+        sp.chapterIds = moveBlock(sp.chapterIds, ids, toIndex);
         if (fromSubplotId && fromSubplotId !== spId) {
           var from = subplotById(tab, fromSubplotId);
-          if (from) from.chapterIds = from.chapterIds.filter(function (id) { return id !== chapterId; });
+          if (from) from.chapterIds = from.chapterIds.filter(function (id) { return ids.indexOf(id) < 0; });
         }
       });
     },
 
     /**
-     * Add a chapter to a subplot at its chronological position. If
-     * `fromSubplotId` names another subplot, the chapter moves from there.
+     * Add one or more chapters to a subplot, each at its chronological
+     * position. If `fromSubplotId` names another subplot, they move from there.
      */
-    addToSubplot: function (tabId, spId, chapterId, fromSubplotId) {
+    addToSubplot: function (tabId, spId, chapterIds, fromSubplotId) {
       onTab(tabId, function (tab) {
         var sp = subplotById(tab, spId);
-        if (!sp || !tab.chapters[chapterId]) return;
-        if (sp.chapterIds.indexOf(chapterId) < 0) {
-          sp.chapterIds.splice(chronologicalSlot(tab, sp, chapterId), 0, chapterId);
-        }
+        if (!sp) return;
+        var ids = idList(chapterIds).filter(function (id) { return tab.chapters[id]; });
+        ids.forEach(function (id) {
+          if (sp.chapterIds.indexOf(id) < 0) sp.chapterIds.splice(chronologicalSlot(tab, sp, id), 0, id);
+        });
         var from = fromSubplotId && fromSubplotId !== spId && subplotById(tab, fromSubplotId);
-        if (from) from.chapterIds = from.chapterIds.filter(function (id) { return id !== chapterId; });
+        if (from) from.chapterIds = from.chapterIds.filter(function (id) { return ids.indexOf(id) < 0; });
       });
     },
 
-    removeFromSubplot: function (tabId, spId, chapterId) {
+    removeFromSubplot: function (tabId, spId, chapterIds) {
+      var ids = idList(chapterIds);
       onTab(tabId, function (tab) {
         var sp = subplotById(tab, spId);
-        if (sp) sp.chapterIds = sp.chapterIds.filter(function (id) { return id !== chapterId; });
+        if (sp) sp.chapterIds = sp.chapterIds.filter(function (id) { return ids.indexOf(id) < 0; });
       });
     },
 
