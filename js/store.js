@@ -14,7 +14,8 @@
  *     deletedTabs: { "<tab id>": "<ISO time>" }, // tombstones, so sync can propagate deletions
  *     tabs: [{
  *       id, name, createdAt, updatedAt,
- *       chapters: { "<chapter id>": { id, name, state, summary, createdAt, updatedAt } },
+ *       chapters: { "<chapter id>": { id, name, state, description, summary, createdAt, updatedAt } },
+ *                   // description: one sentence shown on the card; summary: longer notes
  *       order:    ["<chapter id>", ...],            // chronological outline
  *       subplots: [{ id, name, color, chapterIds: ["<chapter id>", ...] }]
  *     }]
@@ -77,6 +78,13 @@
   function has(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
   function isoOr(value, fallback) { return typeof value === 'string' && value ? value : fallback; }
 
+  var DESCRIPTION_MAX = 300;
+
+  /** A one-line description: single spaces, no line breaks, capped in length. */
+  function cleanDescription(text) {
+    return String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, DESCRIPTION_MAX);
+  }
+
   function cleanName(name, fallback) {
     var s = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
     return s || fallback;
@@ -128,6 +136,7 @@
           id: key,
           name: cleanName(c.name, 'Untitled chapter'),
           state: STATE_IDS.indexOf(c.state) >= 0 ? c.state : STATE_IDS[0],
+          description: cleanDescription(c.description),
           summary: typeof c.summary === 'string' ? c.summary : '',
           createdAt: isoOr(c.createdAt, now()),
           updatedAt: isoOr(c.updatedAt, now())
@@ -307,6 +316,7 @@
   var Store = {
     STORAGE_KEY: STORAGE_KEY,
     STATES: STATES,
+    DESCRIPTION_MAX: DESCRIPTION_MAX,
     SUBPLOT_COLORS: SUBPLOT_COLORS,
     letterFor: letterFor,
     normalize: normalize,
@@ -401,6 +411,7 @@
           id: uid(),
           name: cleanName(fields && fields.name, 'Untitled chapter'),
           state: fields && STATE_IDS.indexOf(fields.state) >= 0 ? fields.state : STATE_IDS[0],
+          description: cleanDescription(fields && fields.description),
           summary: (fields && fields.summary) || '',
           createdAt: t,
           updatedAt: t
@@ -414,13 +425,14 @@
       });
     },
 
-    /** Update name/state/summary, and optionally subplot membership via patch.subplotIds. */
+    /** Update name/state/description/summary, and optionally subplot membership via patch.subplotIds. */
     updateChapter: function (tabId, chapterId, patch) {
       onTab(tabId, function (tab) {
         var ch = tab.chapters[chapterId];
         if (!ch) return;
         if ('name' in patch) ch.name = cleanName(patch.name, ch.name);
         if ('state' in patch && STATE_IDS.indexOf(patch.state) >= 0) ch.state = patch.state;
+        if ('description' in patch) ch.description = cleanDescription(patch.description);
         if ('summary' in patch) ch.summary = String(patch.summary || '');
         if (Array.isArray(patch.subplotIds)) applySubplots(tab, chapterId, patch.subplotIds);
         ch.updatedAt = now();
@@ -497,12 +509,19 @@
       });
     },
 
-    /** Add a chapter to a subplot at its chronological position. */
-    addToSubplot: function (tabId, spId, chapterId) {
+    /**
+     * Add a chapter to a subplot at its chronological position. If
+     * `fromSubplotId` names another subplot, the chapter moves from there.
+     */
+    addToSubplot: function (tabId, spId, chapterId, fromSubplotId) {
       onTab(tabId, function (tab) {
         var sp = subplotById(tab, spId);
-        if (!sp || !tab.chapters[chapterId] || sp.chapterIds.indexOf(chapterId) >= 0) return;
-        sp.chapterIds.splice(chronologicalSlot(tab, sp, chapterId), 0, chapterId);
+        if (!sp || !tab.chapters[chapterId]) return;
+        if (sp.chapterIds.indexOf(chapterId) < 0) {
+          sp.chapterIds.splice(chronologicalSlot(tab, sp, chapterId), 0, chapterId);
+        }
+        var from = fromSubplotId && fromSubplotId !== spId && subplotById(tab, fromSubplotId);
+        if (from) from.chapterIds = from.chapterIds.filter(function (id) { return id !== chapterId; });
       });
     },
 

@@ -54,6 +54,7 @@
   }
 
   var ICONS = {
+    notes: '<path d="M5 3h7l3 3v11H5z"/><path d="M8 9h4M8 12h4"/>',
     close: '<path d="m5 5 10 10M15 5 5 15"/>',
     more: '<circle cx="4.5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15.5" cy="10" r="1.3"/>',
     plus: '<path d="M10 4v12M4 10h12"/>',
@@ -308,21 +309,114 @@
       });
     });
 
+    var view = boardView();
+    board.dataset.view = view;
+    document.querySelectorAll('.view-switch [data-view]').forEach(function (btn) {
+      btn.setAttribute('aria-pressed', btn.dataset.view === settings.view() ? 'true' : 'false');
+    });
+
     board.appendChild(renderMainColumn(tab, memberOf));
-    var subplots = h('div', { class: 'subplots' });
-    tab.subplots.forEach(function (sp, i) { subplots.appendChild(renderSubplotColumn(tab, sp, i)); });
-    subplots.appendChild(h('button', {
+
+    var addButton = h('button', {
       type: 'button', class: 'add-subplot', dataset: { focusKey: 'add-subplot', navKey: 'add' },
       onclick: function () {
         var id = store.addSubplot(tab.id);
+        if (boardView() === 'cards') focusSubplot(tab.id, id);
         var col = board.querySelector('[data-subplot-id="' + id + '"]');
         if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
         announce('Subplot added');
       }
-    }, [icon(ICONS.plus), h('span', { text: 'Add subplot' })]));
-    board.appendChild(subplots);
+    }, [icon(ICONS.plus), h('span', { text: 'Add subplot' })]);
+
+    if (view === 'cards' && tab.subplots.length) {
+      // One subplot as a full column; the others as cards in a grid.
+      var focused = focusedSubplot(tab);
+      board.appendChild(renderSubplotColumn(tab, focused, tab.subplots.indexOf(focused)));
+      var grid = h('div', { class: 'subplot-grid', role: 'list', 'aria-label': 'Other subplots' });
+      tab.subplots.forEach(function (sp, i) {
+        if (sp !== focused) grid.appendChild(renderSubplotTile(tab, sp, i));
+      });
+      grid.appendChild(addButton);
+      board.appendChild(grid);
+    } else {
+      var subplots = h('div', { class: 'subplots' });
+      tab.subplots.forEach(function (sp, i) { subplots.appendChild(renderSubplotColumn(tab, sp, i)); });
+      subplots.appendChild(addButton);
+      board.appendChild(subplots);
+    }
     renderColumnNav(tab);
   }
+
+  // --- Cards view (wide screens) -------------------------------------------
+
+  // Narrow screens always use columns (one per screen).
+  var narrowQuery = window.matchMedia('(max-width: 760px)');
+  function boardView() { return narrowQuery.matches ? 'columns' : settings.view(); }
+  if (narrowQuery.addEventListener) narrowQuery.addEventListener('change', function () { render(); });
+
+  /** The subplot shown as a column in cards view (remembered per story). */
+  function focusedSubplot(tab) {
+    var id = settings.focusedSubplot(tab.id);
+    for (var i = 0; i < tab.subplots.length; i++) if (tab.subplots[i].id === id) return tab.subplots[i];
+    return tab.subplots[0];
+  }
+
+  function focusSubplot(tabId, subplotId) {
+    settings.setFocusedSubplot(tabId, subplotId);
+    render();
+    var sp = store.getSubplot(tabId, subplotId);
+    if (sp) announce(sp.name + ' shown as a column');
+  }
+
+  var TILE_CHAPTERS = 6;
+
+  /** A collapsed subplot: name, counts and its first few chapters. Click to make it the column. */
+  function renderSubplotTile(tab, sp, index) {
+    var done = sp.chapterIds.filter(function (id) { return tab.chapters[id].state === 'done'; }).length;
+    var rows = sp.chapterIds.slice(0, TILE_CHAPTERS).map(function (id, i) {
+      var ch = tab.chapters[id];
+      return h('li', { class: 'tile-chapter', 'data-chapter-id': id, 'data-state': ch.state, title: ch.description || ch.name }, [
+        h('span', { class: 'tile-chapter-num', text: String(i + 1) }),
+        h('span', { class: 'tile-chapter-name', text: ch.name }),
+        h('span', { class: 'tile-chapter-ref', text: 'Ch. ' + (tab.order.indexOf(id) + 1) })
+      ]);
+    });
+    var more = sp.chapterIds.length - TILE_CHAPTERS;
+
+    return h('section', {
+      class: 'subplot-tile', role: 'listitem', style: '--accent:' + sp.color,
+      'data-list': 'sub:' + sp.id, 'data-drop': 'tile', 'data-tile-id': sp.id,
+      'aria-label': 'Subplot: ' + sp.name,
+      onclick: function (e) {
+        if (e.target.closest('.tile-menu')) return;
+        focusSubplot(tab.id, sp.id);
+      }
+    }, [
+      h('div', { class: 'tile-head' }, [
+        h('span', { class: 'subplot-dot', 'aria-hidden': 'true' }),
+        h('button', {
+          type: 'button', class: 'tile-name', title: 'Show “' + sp.name + '” as a column',
+          dataset: { focusKey: 'tile:' + sp.id }
+        }, [sp.name]),
+        h('button', {
+          type: 'button', class: 'icon-btn icon-btn-small tile-menu', 'aria-label': 'Subplot options', 'aria-haspopup': 'menu',
+          title: 'Subplot options', dataset: { focusKey: 'tilemenu:' + sp.id },
+          onclick: function (e) { subplotMenu(tab, sp, index, e.currentTarget); }
+        }, [icon(ICONS.more)])
+      ]),
+      h('div', { class: 'column-sub', text: plural(sp.chapterIds.length, 'chapter') + (sp.chapterIds.length ? ' · ' + done + ' done' : '') }),
+      rows.length ? h('ol', { class: 'tile-chapters' }, rows) : h('p', { class: 'tile-empty', text: 'No chapters yet. Drop one here.' }),
+      more > 0 ? h('div', { class: 'tile-more', text: '+ ' + more + ' more' }) : null
+    ]);
+  }
+
+  document.querySelectorAll('.view-switch [data-view]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      settings.setView(btn.dataset.view);
+      render();
+      announce(btn.dataset.view === 'cards' ? 'Cards view' : 'Columns view');
+    });
+  });
 
   // --- Column switcher (narrow screens) ------------------------------------
 
@@ -501,6 +595,10 @@
         text: 'Ch. ' + ctx.chapterNumber
       }));
     }
+    if (ch.summary) {
+      var preview = ch.summary.length > 400 ? ch.summary.slice(0, 400) + '…' : ch.summary;
+      meta.push(h('span', { class: 'card-notes', title: preview, 'aria-label': 'Has notes' }, [icon(ICONS.notes)]));
+    }
     if (ctx.tags && ctx.tags.length) {
       meta.push(h('span', { class: 'card-tags' }, ctx.tags.map(function (sp) {
         return h('span', { class: 'tag', style: '--tag:' + sp.color, title: 'Subplot: ' + sp.name, text: sp.name });
@@ -522,8 +620,8 @@
       h('span', { class: 'card-num', text: ctx.number }),
       h('div', { class: 'card-body' }, [
         h('div', { class: 'card-title', text: ch.name }),
-        h('div', { class: 'card-meta' }, meta),
-        ch.summary ? h('p', { class: 'card-summary', text: ch.summary }) : null
+        ch.description ? h('p', { class: 'card-description', text: ch.description }) : null,
+        h('div', { class: 'card-meta' }, meta)
       ]),
       inSubplot ? h('button', {
         type: 'button', class: 'card-remove', title: 'Remove from this subplot',
@@ -645,6 +743,12 @@
     var fromId = d.from.indexOf('sub:') === 0 ? d.from.slice(4) : null;
     var sp = store.getSubplot(tab.id, toId);
     var wasIn = sp && sp.chapterIds.indexOf(d.chapterId) >= 0;
+    if (d.tile) {
+      // Dropped on a collapsed subplot card: it goes in at its place in the outline order.
+      store.addToSubplot(tab.id, toId, d.chapterId, d.copy ? null : fromId);
+      if (sp) announce(wasIn ? '“' + ch.name + '” is already in ' + sp.name : 'Added “' + ch.name + '” to ' + sp.name);
+      return;
+    }
     // Between subplots a drag moves the chapter; hold Ctrl/⌘/Alt to copy it instead.
     store.placeInSubplot(tab.id, toId, d.chapterId, d.index, d.copy ? null : fromId);
     if (sp) announce((wasIn ? 'Moved “' : 'Added “') + ch.name + '” in ' + sp.name);
@@ -668,6 +772,7 @@
       store.updateChapter(editing.tabId, editing.chapterId, {
         name: $('chapter-name').value,
         state: select.value,
+        description: $('chapter-description').value,
         summary: $('chapter-summary').value.trim(),
         subplotIds: spIds
       });
@@ -704,6 +809,7 @@
     $('chapter-dialog-number').textContent = 'Chapter ' + (tab.order.indexOf(chapterId) + 1) + ' of ' + tab.order.length;
     $('chapter-name').value = ch.name;
     $('chapter-state').value = ch.state;
+    $('chapter-description').value = ch.description || '';
     $('chapter-summary').value = ch.summary || '';
 
     var checks = $('chapter-subplots');
@@ -1119,13 +1225,13 @@
 
   // Highlight every appearance of a chapter (outline + subplots) on hover/focus.
   function linkHighlight(e) {
-    var card = e.target.closest && e.target.closest('.card');
+    var card = e.target.closest && e.target.closest('.card, .tile-chapter');
     var id = card && e.type !== 'mouseout' && e.type !== 'focusout' ? card.dataset.chapterId : null;
-    board.querySelectorAll('.card.is-linked').forEach(function (c) {
+    board.querySelectorAll('.is-linked').forEach(function (c) {
       if (c.dataset.chapterId !== id) c.classList.remove('is-linked');
     });
     if (!id || document.body.classList.contains('is-dragging')) return;
-    var all = board.querySelectorAll('.card[data-chapter-id="' + id + '"]');
+    var all = board.querySelectorAll('.card[data-chapter-id="' + id + '"], .tile-chapter[data-chapter-id="' + id + '"]');
     if (all.length > 1) all.forEach(function (c) { c.classList.add('is-linked'); });
   }
   ['mouseover', 'mouseout', 'focusin', 'focusout'].forEach(function (t) { board.addEventListener(t, linkHighlight); });

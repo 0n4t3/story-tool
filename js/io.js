@@ -90,6 +90,7 @@
       });
       out.push('### ' + (i + 1) + '. ' + md(ch.name));
       out.push('');
+      if (ch.description) out.push('*' + md(ch.description) + '*', '');
       out.push('**State:** ' + labels[ch.state] + (subplots.length ? ' · **Subplots:** ' + subplots.join(', ') : ''));
       if (ch.summary) out.push('', quote(ch.summary));
       out.push('');

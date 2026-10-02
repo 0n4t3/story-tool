@@ -34,6 +34,14 @@
 
     <div class="header-actions">
       <button type="button" class="save-status" id="save-status" title="Your outlines are saved in this browser's local storage">Saved in this browser</button>
+      <div class="view-switch" role="group" aria-label="Board layout">
+        <button type="button" class="icon-btn" data-view="columns" aria-pressed="true" title="Columns: every subplot as a column" aria-label="Columns view">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="4" height="14" rx="1"/><rect x="8" y="3" width="4" height="14" rx="1"/><rect x="13.5" y="3" width="4" height="14" rx="1"/></svg>
+        </button>
+        <button type="button" class="icon-btn" data-view="cards" aria-pressed="false" title="Cards: one subplot as a column, the rest as cards" aria-label="Cards view">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="5" height="14" rx="1"/><rect x="10" y="3" width="7.5" height="6" rx="1"/><rect x="10" y="11" width="7.5" height="6" rx="1"/></svg>
+        </button>
+      </div>
       <button type="button" class="icon-btn" id="undo-btn" title="Undo (Ctrl+Z)" aria-label="Undo">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5 3 9l4 4"/><path d="M3 9h9a5 5 0 0 1 0 10h-2"/></svg>
       </button>
@@ -64,11 +72,15 @@
         <input type="text" name="name" id="chapter-name" autocomplete="off" required maxlength="200">
       </label>
       <label class="field">
+        <span class="field-label">Short description <span class="field-hint">about a sentence, shown on the card</span></span>
+        <input type="text" name="description" id="chapter-description" autocomplete="off" maxlength="300" placeholder="What happens in this chapter, in one sentence">
+      </label>
+      <label class="field">
         <span class="field-label">State</span>
         <select name="state" id="chapter-state"></select>
       </label>
       <label class="field">
-        <span class="field-label">Summary <span class="field-hint">optional</span></span>
+        <span class="field-label">Notes <span class="field-hint">optional, longer</span></span>
         <textarea name="summary" id="chapter-summary" rows="4" maxlength="5000"></textarea>
       </label>
       <fieldset class="field">
