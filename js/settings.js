@@ -10,7 +10,7 @@
   var THEMES = [
     { id: 'light', label: 'Light', preview: ['#f3efe7', '#fffdf9', '#3b5bdb'] },
     { id: 'dark', label: 'Dark', preview: ['#151311', '#26231f', '#748ffc'] },
-    { id: 'summer', label: 'Summer Waves', preview: ['#dff3f1', '#fffaf0', '#0b7f8c'] },
+    { id: 'summer', label: 'Summer Waves', preview: ['#56738c', '#f6eedc', '#56738c'] },
     { id: 'sketch', label: 'Sketch', preview: ['#fbfbf6', '#ffffff', '#262626'] }
   ];
 
