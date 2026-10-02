@@ -11,6 +11,10 @@
  * drops; they have no positions, so the drop is reported with `tile: true`.
  * The matrix view (`data-layout="matrix"`) is a 2-D snake: instead of a gap,
  * the drop position is shown as a bar before or after the nearest card.
+ *
+ * `options.dragIds(card)` may return several chapter ids (a multi-selection
+ * in the card's list); they are dragged together and reported as
+ * `chapterIds` in `options.onDrop`.
  */
 (function (global) {
   'use strict';
@@ -74,6 +78,7 @@
       var rect = card.getBoundingClientRect();
       var ghost = card.cloneNode(true);
       ghost.classList.add('drag-ghost');
+      ghost.classList.remove('is-selected', 'is-linked', 'drop-left', 'drop-right');
       ghost.removeAttribute('id');
       ghost.setAttribute('aria-hidden', 'true');
       ghost.style.width = rect.width + 'px';
@@ -83,10 +88,25 @@
       placeholder.className = 'drop-placeholder';
       placeholder.style.height = rect.height + 'px';
 
+      var sourceList = card.closest('[data-list]');
+      var ids = (options.dragIds && options.dragIds(card)) || [card.dataset.chapterId];
+      if (ids.indexOf(card.dataset.chapterId) < 0) ids = [card.dataset.chapterId];
+      var cards = Array.prototype.filter.call(sourceList.querySelectorAll('.card'), function (c) {
+        return ids.indexOf(c.dataset.chapterId) >= 0;
+      });
+      if (ids.length > 1) {
+        ghost.classList.add('is-multi');
+        var badge = document.createElement('span');
+        badge.className = 'drag-count';
+        badge.textContent = String(ids.length);
+        ghost.appendChild(badge);
+      }
+
       drag = {
         card: card,
-        chapterId: card.dataset.chapterId,
-        sourceList: card.closest('[data-list]'),
+        cards: cards,
+        ids: ids,
+        sourceList: sourceList,
         ghost: ghost,
         placeholder: placeholder,
         offsetX: e.clientX - rect.left,
@@ -99,7 +119,7 @@
         index: -1,
         raf: 0
       };
-      card.classList.add('is-drag-source');
+      cards.forEach(function (c) { c.classList.add('is-drag-source'); });
       document.body.classList.add('is-dragging');
       try { card.releasePointerCapture(e.pointerId); } catch (err) { /* not captured */ }
       moveGhost();
@@ -126,6 +146,13 @@
     /** The element to highlight for a drop target: its column, or the tile itself. */
     function targetBox(list) { return list.closest('.column, .subplot-tile, .matrix') || list; }
 
+    /** Hide the dragged cards (same-list moves, so the gap shows the new spot) or show them again. */
+    function hideSources(hidden) {
+      drag.cards.forEach(function (c) { c.classList.toggle('is-hidden', hidden); });
+    }
+
+    function isDragged(c) { return drag.ids.indexOf(c.dataset.chapterId) >= 0; }
+
     function clearMarker() {
       if (drag && drag.marker) {
         drag.marker.classList.remove('drop-left', 'drop-right');
@@ -136,9 +163,9 @@
     /** Matrix drop position: before or after the card nearest the pointer, in story order. */
     function matrixTarget(list) {
       drag.placeholder.remove();
-      drag.card.classList.remove('is-hidden');
+      hideSources(false);
       drag.ghost.classList.remove('is-copy');
-      var cards = Array.prototype.filter.call(list.querySelectorAll('.card'), function (c) { return c !== drag.card; });
+      var cards = Array.prototype.filter.call(list.querySelectorAll('.card'), function (c) { return !isDragged(c); });
       if (!cards.length) { drag.index = 0; return; }
       var best = 0;
       var bestDist = Infinity;
@@ -173,7 +200,7 @@
 
       if (!list) {
         drag.placeholder.remove();
-        drag.card.classList.remove('is-hidden');
+        hideSources(false);
         drag.ghost.classList.remove('is-copy');
         drag.index = -1;
         return;
@@ -184,20 +211,23 @@
       if (list.dataset.drop === 'tile') {
         // A collapsed subplot: no positions to show, just highlight it.
         drag.placeholder.remove();
-        drag.card.classList.remove('is-hidden');
+        hideSources(false);
         drag.ghost.classList.toggle('is-copy', dst !== src && (src === 'main' || drag.copy));
         drag.index = 0;
         return;
       }
       // Moving within the same list: hide the original so the gap shows its new spot.
       var sameList = dst === src;
-      drag.card.classList.toggle('is-hidden', sameList);
+      // A single card is lifted out so the gap shows its new spot. A group stays
+      // in place (dimmed): collapsing several cards would shift the list under
+      // the pointer.
+      hideSources(sameList && drag.ids.length === 1);
       // Dropping into a subplot from elsewhere adds the chapter there.
       var adds = !sameList && dst !== 'main' && (src === 'main' || drag.copy);
       drag.ghost.classList.toggle('is-copy', adds);
 
       var cards = Array.prototype.filter.call(list.children, function (c) {
-        return c.classList.contains('card') && c.dataset.chapterId !== drag.chapterId;
+        return c.classList.contains('card') && !isDragged(c);
       });
       var index = cards.length;
       for (var i = 0; i < cards.length; i++) {
@@ -242,7 +272,7 @@
       cancelAnimationFrame(d.raf);
       d.ghost.remove();
       d.placeholder.remove();
-      d.card.classList.remove('is-drag-source', 'is-hidden');
+      d.cards.forEach(function (c) { c.classList.remove('is-drag-source', 'is-hidden'); });
       if (d.targetList) targetBox(d.targetList).classList.remove('is-drop-target');
       document.body.classList.remove('is-dragging');
       suppressClick = true;
@@ -250,7 +280,7 @@
 
       if (commit && d.targetList && d.index >= 0) {
         options.onDrop({
-          chapterId: d.chapterId,
+          chapterIds: d.ids,
           from: d.sourceList.dataset.list,
           to: d.targetList.dataset.list,
           index: d.index,

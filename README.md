@@ -70,6 +70,23 @@ You can also serve the folder with any static file server, for example
 With a mouse you can drag a card from anywhere on it. On touch screens, drag it
 by the grip (⋮⋮) on its left.
 
+**Moving several chapters at once** (all views):
+
+- **Ctrl+click** (⌘+click on a Mac) cards to select them; click again to
+  deselect. **Shift+click** selects a range. A bar at the bottom shows how many
+  are selected.
+- A selection belongs to one column: the outline or a single subplot.
+  Ctrl+clicking in another column starts a new selection there.
+- Drag any selected card to move the whole group. The chapters keep their
+  relative order and land together where you drop them. Groups follow the same
+  rules as single cards (see the table above), including dropping onto a
+  subplot card in Cards view.
+- With the keyboard: **Ctrl+Space** toggles the focused card, **Alt+↑/↓** moves
+  the whole selection one step, and **Delete** removes the selection from a
+  subplot.
+- **Esc**, **Clear**, a plain click on a card, or clicking empty space clears
+  the selection. Every group move is a single undo step.
+
 You can also use the keyboard. Focus a card and press **Enter** to edit it,
 **Alt+↑/↓** to move it, or **Delete** to remove it from the subplot it's in.
 
