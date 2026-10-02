@@ -301,7 +301,7 @@
     board.dataset.tabId = tab.id;
 
     // Which subplots each chapter belongs to, for the tags on outline cards.
-    var memberOf = {};
+    var memberOf = Object.create(null);
     tab.subplots.forEach(function (sp, i) {
       sp.chapterIds.forEach(function (id) {
         (memberOf[id] = memberOf[id] || []).push({ sp: sp, letter: store.letterFor(i) });
@@ -815,6 +815,12 @@
   // --- Sync ---------------------------------------------------------------
 
   var syncDialog = $('sync-dialog');
+  // Don't leave secret keys sitting in the page after the popup closes.
+  syncDialog.addEventListener('close', function () {
+    ['sync-generated-key', 'sync-key-input', 'sync-key-value'].forEach(function (id) { $(id).value = ''; });
+    $('sync-generated').hidden = true;
+    $('sync-key-reveal').hidden = true;
+  });
   var METHOD_LABELS = { key: 'Sync key', extension: 'Browser extension', bunker: 'nsec bunker' };
 
   function openSyncDialog() {

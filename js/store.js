@@ -70,6 +70,13 @@
 
   function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 
+  // Ids come from this app (UUIDs), but imported files and synced data are
+  // validated too: ids end up in CSS selectors and object keys.
+  var ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  function isId(id) { return typeof id === 'string' && ID_RE.test(id) && id !== '__proto__'; }
+  function has(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
+  function isoOr(value, fallback) { return typeof value === 'string' && value ? value : fallback; }
+
   function cleanName(name, fallback) {
     var s = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
     return s || fallback;
@@ -95,54 +102,57 @@
     var out = {
       schemaVersion: SCHEMA_VERSION,
       activeTabId: db.activeTabId,
-      tabOrderUpdatedAt: typeof db.tabOrderUpdatedAt === 'string' ? db.tabOrderUpdatedAt : now(),
+      tabOrderUpdatedAt: isoOr(db.tabOrderUpdatedAt, now()),
       deletedTabs: {},
       tabs: []
     };
     if (db.deletedTabs && typeof db.deletedTabs === 'object') {
       Object.keys(db.deletedTabs).forEach(function (id) {
-        if (typeof db.deletedTabs[id] === 'string') out.deletedTabs[id] = db.deletedTabs[id];
+        if (isId(id) && typeof db.deletedTabs[id] === 'string') out.deletedTabs[id] = db.deletedTabs[id];
       });
     }
-    var seenTabs = {};
+    var seenTabs = Object.create(null);
     db.tabs.forEach(function (rawTab) {
       if (!rawTab || typeof rawTab !== 'object') return;
       var tab = createTab(rawTab.name);
-      if (typeof rawTab.id === 'string' && !seenTabs[rawTab.id]) tab.id = rawTab.id;
+      if (isId(rawTab.id) && !seenTabs[rawTab.id]) tab.id = rawTab.id;
       seenTabs[tab.id] = true;
-      tab.createdAt = rawTab.createdAt || tab.createdAt;
-      tab.updatedAt = rawTab.updatedAt || tab.updatedAt;
+      tab.createdAt = isoOr(rawTab.createdAt, tab.createdAt);
+      tab.updatedAt = isoOr(rawTab.updatedAt, tab.updatedAt);
 
       var rawChapters = rawTab.chapters && typeof rawTab.chapters === 'object' ? rawTab.chapters : {};
       Object.keys(rawChapters).forEach(function (key) {
         var c = rawChapters[key];
-        if (!c || typeof c !== 'object') return;
+        if (!isId(key) || !c || typeof c !== 'object') return;
         tab.chapters[key] = {
           id: key,
           name: cleanName(c.name, 'Untitled chapter'),
           state: STATE_IDS.indexOf(c.state) >= 0 ? c.state : STATE_IDS[0],
           summary: typeof c.summary === 'string' ? c.summary : '',
-          createdAt: c.createdAt || now(),
-          updatedAt: c.updatedAt || now()
+          createdAt: isoOr(c.createdAt, now()),
+          updatedAt: isoOr(c.updatedAt, now())
         };
       });
 
-      var seen = {};
+      var seen = Object.create(null);
       (Array.isArray(rawTab.order) ? rawTab.order : []).forEach(function (id) {
-        if (tab.chapters[id] && !seen[id]) { seen[id] = true; tab.order.push(id); }
+        if (typeof id === 'string' && has(tab.chapters, id) && !seen[id]) { seen[id] = true; tab.order.push(id); }
       });
       // Chapters missing from the outline are appended rather than lost.
       Object.keys(tab.chapters).forEach(function (id) { if (!seen[id]) tab.order.push(id); });
 
+      var seenSubplots = Object.create(null);
       (Array.isArray(rawTab.subplots) ? rawTab.subplots : []).forEach(function (sp, i) {
         if (!sp || typeof sp !== 'object') return;
-        var spSeen = {};
+        var spSeen = Object.create(null);
+        var spId = isId(sp.id) && !seenSubplots[sp.id] ? sp.id : uid();
+        seenSubplots[spId] = true;
         tab.subplots.push({
-          id: typeof sp.id === 'string' ? sp.id : uid(),
+          id: spId,
           name: cleanName(sp.name, 'Subplot ' + letterFor(i)),
           color: /^#[0-9a-f]{6}$/i.test(sp.color) ? sp.color : SUBPLOT_COLORS[i % SUBPLOT_COLORS.length],
           chapterIds: (Array.isArray(sp.chapterIds) ? sp.chapterIds : []).filter(function (id) {
-            if (!tab.chapters[id] || spSeen[id]) return false;
+            if (typeof id !== 'string' || !has(tab.chapters, id) || spSeen[id]) return false;
             spSeen[id] = true;
             return true;
           })
@@ -210,7 +220,7 @@
       redoStack = [];
     }
     persist();
-    emit({ label: options.label });
+    emit({ label: options.label, navigation: !!options.navigation });
     return result;
   }
 
@@ -232,7 +242,7 @@
    */
   function markRestored(prev, next) {
     var t = now();
-    var prevTabs = {};
+    var prevTabs = Object.create(null);
     prev.tabs.forEach(function (tab) { prevTabs[tab.id] = tab; });
     next.tabs.forEach(function (tab) {
       var before = prevTabs[tab.id];
@@ -305,7 +315,17 @@
       load();
       // Keep several open browser tabs of the app in sync.
       global.addEventListener('storage', function (e) {
-        if (e.key !== STORAGE_KEY || !e.newValue) return;
+        if (e.key !== STORAGE_KEY && e.key !== null) return;
+        // Another tab changed the data: undo history here no longer matches it.
+        undoStack = [];
+        redoStack = [];
+        if (e.key === null || !e.newValue) {
+          // Data was deleted in another tab: don't keep (and later re-save) the old copy.
+          db = createDatabase();
+          persist();
+          emit({ reset: true });
+          return;
+        }
         try {
           db = normalize(JSON.parse(e.newValue));
           emit({ external: true });
@@ -367,7 +387,7 @@
     },
 
     setActiveTab: function (tabId) {
-      commit(function (d) { if (tabById(d, tabId)) d.activeTabId = tabId; }, { history: false });
+      commit(function (d) { if (tabById(d, tabId)) d.activeTabId = tabId; }, { history: false, navigation: true });
     },
 
     // --- chapters -----------------------------------------------------------
