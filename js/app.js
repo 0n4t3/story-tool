@@ -54,6 +54,7 @@
   }
 
   var ICONS = {
+    search: '<circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4.5 4.5"/>',
     notes: '<path d="M5 3h7l3 3v11H5z"/><path d="M8 9h4M8 12h4"/>',
     close: '<path d="m5 5 10 10M15 5 5 15"/>',
     more: '<circle cx="4.5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15.5" cy="10" r="1.3"/>',
@@ -232,9 +233,14 @@
     board.querySelectorAll('[data-list]').forEach(function (l) {
       if (scrolls[l.dataset.list]) l.scrollTop = scrolls[l.dataset.list];
     });
+    applySearch(false);
     if (focusKey) {
       var el = document.querySelector('[data-focus-key="' + CSS.escape(focusKey) + '"]');
-      if (el) el.focus({ preventScroll: false });
+      if (el) {
+        el.focus({ preventScroll: false });
+        // A re-rendered text field (e.g. the search box during a sync) keeps the caret at the end.
+        if (el.tagName === 'INPUT' && /^(text|search)$/.test(el.type)) el.setSelectionRange(el.value.length, el.value.length);
+      }
     }
 
     $('undo-btn').disabled = !store.canUndo();
@@ -299,7 +305,10 @@
 
   function renderBoard() {
     var tab = store.activeTab();
-    if (board.dataset.tabId !== tab.id) selection = { list: null, ids: [], anchor: null };
+    if (board.dataset.tabId !== tab.id) {
+      selection = { list: null, ids: [], anchor: null };
+      search = { query: '', index: 0 };
+    }
     pruneSelection(tab);
     board.textContent = '';
     board.dataset.tabId = tab.id;
@@ -519,12 +528,137 @@
         h('div', { class: 'column-title-row' }, [
           h('h2', { class: 'column-title', id: 'main-title', text: 'Chronological outline' })
         ]),
-        h('div', { class: 'column-sub', text: summary })
+        h('div', { class: 'column-sub', text: summary }),
+        searchField()
       ]),
       list,
       h('footer', { class: 'column-footer' }, [quickAdd(tab, null)])
     ]);
   }
+
+  // --- Search in the chronological outline ---------------------------------
+  // Typing scrolls to the closest-matching chapter name as you type. Enter /
+  // Shift+Enter step through the other matches, Esc clears.
+
+  var search = { query: '', index: 0 };
+
+  /**
+   * How well a chapter name matches the query (higher is better, -1 = no match):
+   * exact, starts with, a word starts with, contains, all words, letters in order.
+   */
+  function matchScore(name, query) {
+    var n = name.toLowerCase();
+    var q = query.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!q) return -1;
+    if (n === q) return 100;
+    if (n.indexOf(q) === 0) return 90;
+    var at = n.indexOf(q);
+    if (at > 0) return /[\s\-–—:,.;'"(/]/.test(n.charAt(at - 1)) ? 80 : 70;
+    var words = q.split(' ');
+    if (words.length > 1 && words.every(function (w) { return n.indexOf(w) >= 0; })) return 60;
+    var i = 0;
+    for (var k = 0; k < n.length && i < q.length; k++) if (n.charAt(k) === q.charAt(i)) i++;
+    return i === q.length && q.length > 1 ? 40 : -1;
+  }
+
+  /** Matching chapter ids, best first (ties in story order). A number jumps to that chapter. */
+  function searchMatches(tab) {
+    var q = search.query.trim();
+    if (!q) return [];
+    var scored = [];
+    tab.order.forEach(function (id, i) {
+      var score = matchScore(tab.chapters[id].name, q);
+      if (/^\d+$/.test(q) && Number(q) === i + 1) score = Math.max(score, 95);
+      if (score >= 0) scored.push({ id: id, score: score, pos: i });
+    });
+    scored.sort(function (a, b) { return b.score - a.score || a.pos - b.pos; });
+    return scored.map(function (s) { return s.id; });
+  }
+
+  /** Highlight matches in the outline (and scroll to the current one if `scroll`). */
+  function applySearch(scroll) {
+    var root = board.querySelector('[data-list="main"]');
+    board.querySelectorAll('.is-search-hit, .is-search-match').forEach(function (c) {
+      c.classList.remove('is-search-hit', 'is-search-match');
+    });
+    var count = board.querySelector('.search-count');
+    var input = board.querySelector('.search-input');
+    if (!root || !count) return;
+    var matches = searchMatches(store.activeTab());
+    var field = count.parentNode;
+    field.classList.toggle('has-query', !!search.query.trim());
+    field.classList.toggle('no-match', !!search.query.trim() && !matches.length);
+    if (!matches.length) {
+      count.textContent = search.query.trim() ? 'No match' : '';
+      if (input) input.removeAttribute('aria-activedescendant');
+      return;
+    }
+    search.index = ((search.index % matches.length) + matches.length) % matches.length;
+    var hit = null;
+    matches.forEach(function (id, i) {
+      var card = root.querySelector('.card[data-chapter-id="' + id + '"]');
+      if (!card) return;
+      card.classList.add(i === search.index ? 'is-search-hit' : 'is-search-match');
+      if (i === search.index) hit = card;
+    });
+    count.textContent = matches.length === 1 ? '1 match' : (search.index + 1) + ' of ' + matches.length;
+    if (scroll && hit) {
+      hit.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+      var ch = store.activeTab().chapters[matches[search.index]];
+      if (ch) announce('Chapter ' + (store.activeTab().order.indexOf(ch.id) + 1) + ': ' + ch.name);
+    }
+  }
+
+  function searchField() {
+    var input = h('input', {
+      type: 'search', class: 'search-input', placeholder: 'Find a chapter…', autocomplete: 'off', spellcheck: 'false',
+      'aria-label': 'Find a chapter in the outline', 'aria-keyshortcuts': 'Enter Shift+Enter Escape',
+      dataset: { focusKey: 'search:main' },
+      oninput: function (e) {
+        search.query = e.target.value;
+        search.index = 0;
+        applySearch(true);
+      },
+      onkeydown: function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          search.index += e.shiftKey ? -1 : 1;
+          applySearch(true);
+        } else if (e.key === 'Escape' && search.query) {
+          e.preventDefault();
+          e.stopPropagation();
+          search.query = '';
+          e.target.value = '';
+          applySearch(false);
+        }
+      }
+    });
+    input.value = search.query;
+    return h('div', { class: 'search', role: 'search' }, [
+      h('span', { class: 'search-icon', 'aria-hidden': 'true' }, [icon(ICONS.search)]),
+      input,
+      h('span', { class: 'search-count', 'aria-live': 'polite' }),
+      h('button', {
+        type: 'button', class: 'search-clear', 'aria-label': 'Clear search', title: 'Clear search (Esc)',
+        onclick: function () {
+          search.query = '';
+          input.value = '';
+          applySearch(false);
+          input.focus();
+        }
+      }, [icon(ICONS.close)])
+    ]);
+  }
+
+  // "/" jumps to the search box (when not typing somewhere else).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || isTyping(document.activeElement) || document.querySelector('dialog[open]')) return;
+    var input = board.querySelector('.search-input');
+    if (!input) return;
+    e.preventDefault();
+    input.focus();
+    input.select();
+  });
 
   // --- Matrix view (wide screens) ------------------------------------------
 
@@ -584,10 +718,11 @@
 
     return h('section', { class: 'matrix', 'aria-labelledby': 'matrix-title' }, [
       h('header', { class: 'matrix-header' }, [
-        h('div', {}, [
+        h('div', { class: 'matrix-heading' }, [
           h('h2', { class: 'column-title', id: 'matrix-title', text: 'Chronological outline' }),
           h('div', { class: 'column-sub', text: summary })
         ]),
+        searchField(),
         quickAdd(tab, null)
       ]),
       snake

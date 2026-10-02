@@ -49,6 +49,16 @@ You can also serve the folder with any static file server, for example
       too.
   - The layout, and which subplot is the column in each story, are remembered
     in this browser.
+- **Find a chapter.** The search box at the top of the chronological outline
+  (and in the Matrix header) works as you type:
+  - It scrolls to the closest-matching chapter name and highlights it. Other
+    matches get a lighter highlight.
+  - Ranking: an exact name first, then names that start with what you typed,
+    then a word that starts with it, then names containing it, then all words
+    present, then the letters in order (so "harbor" finds "harbour").
+  - Type a number to jump to that chapter.
+  - **Enter** and **Shift+Enter** step through matches, and **Esc** clears.
+    Press **/** anywhere to jump to the box.
 - **Undo / redo** for every change (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z).
 - **Themes:** Light, Dark, Summer Waves and Sketch, under Settings (gear icon).
   Until you pick one, the app follows your system's light/dark setting.
