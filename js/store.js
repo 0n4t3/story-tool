@@ -1,0 +1,473 @@
+/*
+ * Story Outline Tool — data store.
+ *
+ * Holds the whole database in memory, persists it to localStorage, and keeps
+ * an undo/redo history. Every change goes through `commit()` so that saving,
+ * history and re-rendering happen in one place.
+ *
+ * Database shape (schemaVersion 1):
+ *
+ *   {
+ *     schemaVersion: 1,
+ *     activeTabId: "<tab id>",
+ *     tabs: [{
+ *       id, name, createdAt, updatedAt,
+ *       chapters: { "<chapter id>": { id, name, state, summary, createdAt, updatedAt } },
+ *       order:    ["<chapter id>", ...],            // chronological outline
+ *       subplots: [{ id, name, color, chapterIds: ["<chapter id>", ...] }]
+ *     }]
+ *   }
+ *
+ * A chapter exists once per tab (in `chapters`) and is referenced by id from
+ * the chronological `order` and from any number of subplots, so editing it in
+ * one place updates it everywhere. Chapter numbers are never stored: they are
+ * derived from positions in `order` / `chapterIds`.
+ */
+(function (global) {
+  'use strict';
+
+  var STORAGE_KEY = 'storyOutlineTool.db';
+  var SCHEMA_VERSION = 1;
+  var HISTORY_LIMIT = 100;
+
+  var STATES = [
+    { id: 'idea', label: 'Idea' },
+    { id: 'outlined', label: 'Outlined' },
+    { id: 'drafting', label: 'Drafting' },
+    { id: 'drafted', label: 'Drafted' },
+    { id: 'revising', label: 'Revising' },
+    { id: 'done', label: 'Done' }
+  ];
+  var STATE_IDS = STATES.map(function (s) { return s.id; });
+
+  var SUBPLOT_COLORS = ['#e4572e', '#2e86ab', '#2f9e44', '#a05ec4', '#e8a33d', '#17a398', '#d1495b', '#5c6bc0'];
+
+  function uid() {
+    if (global.crypto && typeof global.crypto.randomUUID === 'function') {
+      return global.crypto.randomUUID();
+    }
+    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function now() { return new Date().toISOString(); }
+
+  /** 0 -> "A", 25 -> "Z", 26 -> "AA" */
+  function letterFor(index) {
+    var s = '';
+    var n = index + 1;
+    while (n > 0) {
+      var r = (n - 1) % 26;
+      s = String.fromCharCode(65 + r) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  }
+
+  function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+
+  function cleanName(name, fallback) {
+    var s = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+    return s || fallback;
+  }
+
+  function createTab(name) {
+    var t = now();
+    return { id: uid(), name: cleanName(name, 'Untitled story'), createdAt: t, updatedAt: t, chapters: {}, order: [], subplots: [] };
+  }
+
+  function createDatabase() {
+    var tab = createTab('My Story');
+    return { schemaVersion: SCHEMA_VERSION, activeTabId: tab.id, tabs: [tab] };
+  }
+
+  /**
+   * Validate and repair a database object. Drops dangling references and
+   * duplicates so that the rest of the app can trust the shape. Intended to
+   * also be the entry point for imported databases.
+   */
+  function normalize(db) {
+    if (!db || typeof db !== 'object' || !Array.isArray(db.tabs)) return createDatabase();
+    var out = { schemaVersion: SCHEMA_VERSION, activeTabId: db.activeTabId, tabs: [] };
+    var seenTabs = {};
+    db.tabs.forEach(function (rawTab) {
+      if (!rawTab || typeof rawTab !== 'object') return;
+      var tab = createTab(rawTab.name);
+      if (typeof rawTab.id === 'string' && !seenTabs[rawTab.id]) tab.id = rawTab.id;
+      seenTabs[tab.id] = true;
+      tab.createdAt = rawTab.createdAt || tab.createdAt;
+      tab.updatedAt = rawTab.updatedAt || tab.updatedAt;
+
+      var rawChapters = rawTab.chapters && typeof rawTab.chapters === 'object' ? rawTab.chapters : {};
+      Object.keys(rawChapters).forEach(function (key) {
+        var c = rawChapters[key];
+        if (!c || typeof c !== 'object') return;
+        tab.chapters[key] = {
+          id: key,
+          name: cleanName(c.name, 'Untitled chapter'),
+          state: STATE_IDS.indexOf(c.state) >= 0 ? c.state : STATE_IDS[0],
+          summary: typeof c.summary === 'string' ? c.summary : '',
+          createdAt: c.createdAt || now(),
+          updatedAt: c.updatedAt || now()
+        };
+      });
+
+      var seen = {};
+      (Array.isArray(rawTab.order) ? rawTab.order : []).forEach(function (id) {
+        if (tab.chapters[id] && !seen[id]) { seen[id] = true; tab.order.push(id); }
+      });
+      // Chapters missing from the outline are appended rather than lost.
+      Object.keys(tab.chapters).forEach(function (id) { if (!seen[id]) tab.order.push(id); });
+
+      (Array.isArray(rawTab.subplots) ? rawTab.subplots : []).forEach(function (sp, i) {
+        if (!sp || typeof sp !== 'object') return;
+        var spSeen = {};
+        tab.subplots.push({
+          id: typeof sp.id === 'string' ? sp.id : uid(),
+          name: cleanName(sp.name, 'Subplot ' + letterFor(i)),
+          color: /^#[0-9a-f]{6}$/i.test(sp.color) ? sp.color : SUBPLOT_COLORS[i % SUBPLOT_COLORS.length],
+          chapterIds: (Array.isArray(sp.chapterIds) ? sp.chapterIds : []).filter(function (id) {
+            if (!tab.chapters[id] || spSeen[id]) return false;
+            spSeen[id] = true;
+            return true;
+          })
+        });
+      });
+
+      out.tabs.push(tab);
+    });
+    if (!out.tabs.length) return createDatabase();
+    if (!seenTabs[out.activeTabId]) out.activeTabId = out.tabs[0].id;
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Store
+
+  var db = null;
+  var undoStack = [];
+  var redoStack = [];
+  var listeners = [];
+  var lastSaveError = null;
+
+  function emit(meta) {
+    listeners.forEach(function (fn) { fn(meta || {}); });
+  }
+
+  function persist() {
+    try {
+      global.localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+      lastSaveError = null;
+    } catch (err) {
+      lastSaveError = err;
+    }
+  }
+
+  function load() {
+    var raw = null;
+    try { raw = global.localStorage.getItem(STORAGE_KEY); } catch (err) { lastSaveError = err; }
+    var parsed = null;
+    if (raw) {
+      try { parsed = JSON.parse(raw); } catch (err) { parsed = null; }
+    }
+    db = normalize(parsed);
+    if (!raw) persist();
+  }
+
+  /**
+   * Apply `mutator` to the database. If anything changed, record an undo step
+   * (unless options.history === false), save, and notify listeners.
+   */
+  function commit(mutator, options) {
+    options = options || {};
+    var before = JSON.stringify(db);
+    var result = mutator(db);
+    var after = JSON.stringify(db);
+    if (before === after) return result;
+    if (options.history !== false) {
+      undoStack.push(before);
+      if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+      redoStack = [];
+    }
+    persist();
+    emit({ label: options.label });
+    return result;
+  }
+
+  function restore(fromStack, toStack) {
+    if (!fromStack.length) return false;
+    toStack.push(JSON.stringify(db));
+    db = normalize(JSON.parse(fromStack.pop()));
+    persist();
+    emit({ history: true });
+    return true;
+  }
+
+  function tabById(d, id) {
+    for (var i = 0; i < d.tabs.length; i++) if (d.tabs[i].id === id) return d.tabs[i];
+    return null;
+  }
+
+  function subplotById(tab, id) {
+    for (var i = 0; i < tab.subplots.length; i++) if (tab.subplots[i].id === id) return tab.subplots[i];
+    return null;
+  }
+
+  function touch(tab) { tab.updatedAt = now(); }
+
+  function moveInArray(arr, item, toIndex) {
+    var from = arr.indexOf(item);
+    if (from >= 0) arr.splice(from, 1);
+    arr.splice(clamp(toIndex, 0, arr.length), 0, item);
+  }
+
+  /** Index at which `chapterId` should go in a subplot to respect chronological order. */
+  function chronologicalSlot(tab, sp, chapterId) {
+    var pos = tab.order.indexOf(chapterId);
+    for (var i = 0; i < sp.chapterIds.length; i++) {
+      if (tab.order.indexOf(sp.chapterIds[i]) > pos) return i;
+    }
+    return sp.chapterIds.length;
+  }
+
+  function applySubplots(tab, chapterId, spIds) {
+    tab.subplots.forEach(function (sp) {
+      var want = spIds.indexOf(sp.id) >= 0;
+      var has = sp.chapterIds.indexOf(chapterId) >= 0;
+      if (want && !has) sp.chapterIds.splice(chronologicalSlot(tab, sp, chapterId), 0, chapterId);
+      if (!want && has) sp.chapterIds = sp.chapterIds.filter(function (id) { return id !== chapterId; });
+    });
+  }
+
+  // Wrap a tab-scoped mutation so it is a no-op if the tab has disappeared.
+  function onTab(tabId, fn, options) {
+    return commit(function (d) {
+      var tab = tabById(d, tabId);
+      if (!tab) return undefined;
+      var result = fn(tab, d);
+      touch(tab);
+      return result;
+    }, options);
+  }
+
+  var Store = {
+    STATES: STATES,
+    SUBPLOT_COLORS: SUBPLOT_COLORS,
+    letterFor: letterFor,
+    normalize: normalize,
+
+    init: function () {
+      load();
+      // Keep several open browser tabs of the app in sync.
+      global.addEventListener('storage', function (e) {
+        if (e.key !== STORAGE_KEY || !e.newValue) return;
+        try {
+          db = normalize(JSON.parse(e.newValue));
+          emit({ external: true });
+        } catch (err) { /* ignore malformed writes */ }
+      });
+    },
+
+    subscribe: function (fn) { listeners.push(fn); },
+    getDb: function () { return db; },
+    saveError: function () { return lastSaveError; },
+
+    activeTab: function () { return tabById(db, db.activeTabId) || db.tabs[0]; },
+    getTab: function (id) { return tabById(db, id); },
+    getSubplot: function (tabId, spId) {
+      var tab = tabById(db, tabId);
+      return tab ? subplotById(tab, spId) : null;
+    },
+
+    canUndo: function () { return undoStack.length > 0; },
+    canRedo: function () { return redoStack.length > 0; },
+    undo: function () { return restore(undoStack, redoStack); },
+    redo: function () { return restore(redoStack, undoStack); },
+
+    // --- tabs ---------------------------------------------------------------
+
+    addTab: function (name) {
+      return commit(function (d) {
+        var tab = createTab(name || 'Story ' + (d.tabs.length + 1));
+        d.tabs.push(tab);
+        d.activeTabId = tab.id;
+        return tab.id;
+      });
+    },
+
+    renameTab: function (tabId, name) {
+      onTab(tabId, function (tab) { tab.name = cleanName(name, tab.name); });
+    },
+
+    deleteTab: function (tabId) {
+      commit(function (d) {
+        var i = d.tabs.findIndex(function (t) { return t.id === tabId; });
+        if (i < 0) return;
+        d.tabs.splice(i, 1);
+        if (!d.tabs.length) d.tabs.push(createTab('My Story'));
+        if (d.activeTabId === tabId) d.activeTabId = d.tabs[Math.min(i, d.tabs.length - 1)].id;
+      });
+    },
+
+    moveTab: function (tabId, toIndex) {
+      commit(function (d) {
+        var tab = tabById(d, tabId);
+        if (tab) moveInArray(d.tabs, tab, toIndex);
+      });
+    },
+
+    setActiveTab: function (tabId) {
+      commit(function (d) { if (tabById(d, tabId)) d.activeTabId = tabId; }, { history: false });
+    },
+
+    // --- chapters -----------------------------------------------------------
+
+    /** Create a chapter. options.index places it in the outline; options.subplotId also adds it to a subplot. */
+    addChapter: function (tabId, fields, options) {
+      options = options || {};
+      return onTab(tabId, function (tab) {
+        var t = now();
+        var ch = {
+          id: uid(),
+          name: cleanName(fields && fields.name, 'Untitled chapter'),
+          state: fields && STATE_IDS.indexOf(fields.state) >= 0 ? fields.state : STATE_IDS[0],
+          summary: (fields && fields.summary) || '',
+          createdAt: t,
+          updatedAt: t
+        };
+        tab.chapters[ch.id] = ch;
+        var index = options.index == null ? tab.order.length : options.index;
+        tab.order.splice(clamp(index, 0, tab.order.length), 0, ch.id);
+        var sp = options.subplotId && subplotById(tab, options.subplotId);
+        if (sp) sp.chapterIds.push(ch.id);
+        return ch.id;
+      });
+    },
+
+    /** Update name/state/summary, and optionally subplot membership via patch.subplotIds. */
+    updateChapter: function (tabId, chapterId, patch) {
+      onTab(tabId, function (tab) {
+        var ch = tab.chapters[chapterId];
+        if (!ch) return;
+        if ('name' in patch) ch.name = cleanName(patch.name, ch.name);
+        if ('state' in patch && STATE_IDS.indexOf(patch.state) >= 0) ch.state = patch.state;
+        if ('summary' in patch) ch.summary = String(patch.summary || '');
+        if (Array.isArray(patch.subplotIds)) applySubplots(tab, chapterId, patch.subplotIds);
+        ch.updatedAt = now();
+      });
+    },
+
+    deleteChapter: function (tabId, chapterId) {
+      onTab(tabId, function (tab) {
+        delete tab.chapters[chapterId];
+        tab.order = tab.order.filter(function (id) { return id !== chapterId; });
+        tab.subplots.forEach(function (sp) {
+          sp.chapterIds = sp.chapterIds.filter(function (id) { return id !== chapterId; });
+        });
+      });
+    },
+
+    /** Move a chapter within the chronological outline. `toIndex` is its final position. */
+    moveChapter: function (tabId, chapterId, toIndex) {
+      onTab(tabId, function (tab) {
+        if (tab.chapters[chapterId]) moveInArray(tab.order, chapterId, toIndex);
+      });
+    },
+
+    // --- subplots -----------------------------------------------------------
+
+    addSubplot: function (tabId, name) {
+      return onTab(tabId, function (tab) {
+        var n = tab.subplots.length;
+        var used = tab.subplots.map(function (s) { return s.color; });
+        var color = SUBPLOT_COLORS.filter(function (c) { return used.indexOf(c) < 0; })[0] ||
+          SUBPLOT_COLORS[n % SUBPLOT_COLORS.length];
+        var sp = { id: uid(), name: cleanName(name, 'Subplot ' + letterFor(n)), color: color, chapterIds: [] };
+        tab.subplots.push(sp);
+        return sp.id;
+      });
+    },
+
+    updateSubplot: function (tabId, spId, patch) {
+      onTab(tabId, function (tab) {
+        var sp = subplotById(tab, spId);
+        if (!sp) return;
+        if ('name' in patch) sp.name = cleanName(patch.name, sp.name);
+        if ('color' in patch && /^#[0-9a-f]{6}$/i.test(patch.color)) sp.color = patch.color;
+      });
+    },
+
+    deleteSubplot: function (tabId, spId) {
+      onTab(tabId, function (tab) {
+        tab.subplots = tab.subplots.filter(function (s) { return s.id !== spId; });
+      });
+    },
+
+    moveSubplot: function (tabId, spId, toIndex) {
+      onTab(tabId, function (tab) {
+        var sp = subplotById(tab, spId);
+        if (sp) moveInArray(tab.subplots, sp, toIndex);
+      });
+    },
+
+    /**
+     * Put a chapter at `toIndex` in a subplot (reordering it if it is already
+     * there). If `fromSubplotId` names a different subplot, the chapter is
+     * removed from that one, i.e. it is moved rather than copied.
+     */
+    placeInSubplot: function (tabId, spId, chapterId, toIndex, fromSubplotId) {
+      onTab(tabId, function (tab) {
+        var sp = subplotById(tab, spId);
+        if (!sp || !tab.chapters[chapterId]) return;
+        moveInArray(sp.chapterIds, chapterId, toIndex);
+        if (fromSubplotId && fromSubplotId !== spId) {
+          var from = subplotById(tab, fromSubplotId);
+          if (from) from.chapterIds = from.chapterIds.filter(function (id) { return id !== chapterId; });
+        }
+      });
+    },
+
+    /** Add a chapter to a subplot at its chronological position. */
+    addToSubplot: function (tabId, spId, chapterId) {
+      onTab(tabId, function (tab) {
+        var sp = subplotById(tab, spId);
+        if (!sp || !tab.chapters[chapterId] || sp.chapterIds.indexOf(chapterId) >= 0) return;
+        sp.chapterIds.splice(chronologicalSlot(tab, sp, chapterId), 0, chapterId);
+      });
+    },
+
+    removeFromSubplot: function (tabId, spId, chapterId) {
+      onTab(tabId, function (tab) {
+        var sp = subplotById(tab, spId);
+        if (sp) sp.chapterIds = sp.chapterIds.filter(function (id) { return id !== chapterId; });
+      });
+    },
+
+    /** Make a chapter's subplot membership match `spIds` exactly (as one undo step). */
+    setChapterSubplots: function (tabId, chapterId, spIds) {
+      onTab(tabId, function (tab) {
+        if (tab.chapters[chapterId]) applySubplots(tab, chapterId, spIds);
+      });
+    },
+
+    /** Reorder a subplot to match the chronological outline. */
+    sortSubplot: function (tabId, spId) {
+      onTab(tabId, function (tab) {
+        var sp = subplotById(tab, spId);
+        if (!sp) return;
+        sp.chapterIds.sort(function (a, b) { return tab.order.indexOf(a) - tab.order.indexOf(b); });
+      });
+    },
+
+    /** Replace the whole database (used by undo/redo and, later, import). */
+    replaceDatabase: function (raw) {
+      commit(function (d) {
+        var next = normalize(raw);
+        Object.keys(d).forEach(function (k) { delete d[k]; });
+        Object.keys(next).forEach(function (k) { d[k] = next[k]; });
+      });
+    }
+  };
+
+  global.SOT = global.SOT || {};
+  global.SOT.store = Store;
+})(window);
