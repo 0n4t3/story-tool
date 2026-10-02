@@ -10,6 +10,8 @@
  *   {
  *     schemaVersion: 1,
  *     activeTabId: "<tab id>",
+ *     tabOrderUpdatedAt: "<ISO time>",          // last time tabs were added/removed/reordered
+ *     deletedTabs: { "<tab id>": "<ISO time>" }, // tombstones, so sync can propagate deletions
  *     tabs: [{
  *       id, name, createdAt, updatedAt,
  *       chapters: { "<chapter id>": { id, name, state, summary, createdAt, updatedAt } },
@@ -22,6 +24,9 @@
  * the chronological `order` and from any number of subplots, so editing it in
  * one place updates it everywhere. Chapter numbers are never stored: they are
  * derived from positions in `order` / `chapterIds`.
+ *
+ * Each tab's `updatedAt` changes on every edit inside it. Sync (js/sync.js)
+ * merges whole tabs by comparing these timestamps.
  */
 (function (global) {
   'use strict';
@@ -77,7 +82,7 @@
 
   function createDatabase() {
     var tab = createTab('My Story');
-    return { schemaVersion: SCHEMA_VERSION, activeTabId: tab.id, tabs: [tab] };
+    return { schemaVersion: SCHEMA_VERSION, activeTabId: tab.id, tabOrderUpdatedAt: now(), deletedTabs: {}, tabs: [tab] };
   }
 
   /**
@@ -87,7 +92,18 @@
    */
   function normalize(db) {
     if (!db || typeof db !== 'object' || !Array.isArray(db.tabs)) return createDatabase();
-    var out = { schemaVersion: SCHEMA_VERSION, activeTabId: db.activeTabId, tabs: [] };
+    var out = {
+      schemaVersion: SCHEMA_VERSION,
+      activeTabId: db.activeTabId,
+      tabOrderUpdatedAt: typeof db.tabOrderUpdatedAt === 'string' ? db.tabOrderUpdatedAt : now(),
+      deletedTabs: {},
+      tabs: []
+    };
+    if (db.deletedTabs && typeof db.deletedTabs === 'object') {
+      Object.keys(db.deletedTabs).forEach(function (id) {
+        if (typeof db.deletedTabs[id] === 'string') out.deletedTabs[id] = db.deletedTabs[id];
+      });
+    }
     var seenTabs = {};
     db.tabs.forEach(function (rawTab) {
       if (!rawTab || typeof rawTab !== 'object') return;
@@ -135,7 +151,12 @@
 
       out.tabs.push(tab);
     });
-    if (!out.tabs.length) return createDatabase();
+    if (!out.tabs.length) {
+      var fresh = createDatabase();
+      fresh.deletedTabs = out.deletedTabs;
+      return fresh;
+    }
+    out.tabs.forEach(function (t) { delete out.deletedTabs[t.id]; });
     if (!seenTabs[out.activeTabId]) out.activeTabId = out.tabs[0].id;
     return out;
   }
@@ -196,10 +217,34 @@
   function restore(fromStack, toStack) {
     if (!fromStack.length) return false;
     toStack.push(JSON.stringify(db));
+    var prev = db;
     db = normalize(JSON.parse(fromStack.pop()));
+    markRestored(prev, db);
     persist();
     emit({ history: true });
     return true;
+  }
+
+  /**
+   * Undo/redo bring back older snapshots, including their old timestamps.
+   * Re-stamp whatever the restore changed so sync treats it as a new edit
+   * instead of letting the (newer) synced copy win.
+   */
+  function markRestored(prev, next) {
+    var t = now();
+    var prevTabs = {};
+    prev.tabs.forEach(function (tab) { prevTabs[tab.id] = tab; });
+    next.tabs.forEach(function (tab) {
+      var before = prevTabs[tab.id];
+      if (!before || JSON.stringify(before) !== JSON.stringify(tab)) tab.updatedAt = t;
+      delete next.deletedTabs[tab.id];
+    });
+    var nextIds = next.tabs.map(function (tab) { return tab.id; });
+    prev.tabs.forEach(function (tab) {
+      if (nextIds.indexOf(tab.id) < 0) next.deletedTabs[tab.id] = t;
+    });
+    var prevIds = prev.tabs.map(function (tab) { return tab.id; });
+    if (prevIds.join() !== nextIds.join()) next.tabOrderUpdatedAt = t;
   }
 
   function tabById(d, id) {
@@ -250,6 +295,7 @@
   }
 
   var Store = {
+    STORAGE_KEY: STORAGE_KEY,
     STATES: STATES,
     SUBPLOT_COLORS: SUBPLOT_COLORS,
     letterFor: letterFor,
@@ -290,6 +336,7 @@
         var tab = createTab(name || 'Story ' + (d.tabs.length + 1));
         d.tabs.push(tab);
         d.activeTabId = tab.id;
+        d.tabOrderUpdatedAt = now();
         return tab.id;
       });
     },
@@ -303,6 +350,8 @@
         var i = d.tabs.findIndex(function (t) { return t.id === tabId; });
         if (i < 0) return;
         d.tabs.splice(i, 1);
+        d.deletedTabs[tabId] = now();
+        d.tabOrderUpdatedAt = now();
         if (!d.tabs.length) d.tabs.push(createTab('My Story'));
         if (d.activeTabId === tabId) d.activeTabId = d.tabs[Math.min(i, d.tabs.length - 1)].id;
       });
@@ -311,7 +360,9 @@
     moveTab: function (tabId, toIndex) {
       commit(function (d) {
         var tab = tabById(d, tabId);
-        if (tab) moveInArray(d.tabs, tab, toIndex);
+        if (!tab) return;
+        moveInArray(d.tabs, tab, toIndex);
+        d.tabOrderUpdatedAt = now();
       });
     },
 
@@ -458,15 +509,56 @@
       });
     },
 
-    /** Replace the whole database (used by undo/redo and, later, import). */
-    replaceDatabase: function (raw) {
+    /**
+     * Replace all local data with an imported database (undoable). Imported
+     * tabs are stamped as just edited and the tabs they replace are marked
+     * deleted, so that if sync is on, the imported data wins.
+     */
+    importDatabase: function (raw) {
       commit(function (d) {
         var next = normalize(raw);
-        Object.keys(d).forEach(function (k) { delete d[k]; });
-        Object.keys(next).forEach(function (k) { d[k] = next[k]; });
+        var t = now();
+        next.tabs.forEach(function (tab) { tab.updatedAt = t; delete d.deletedTabs[tab.id]; });
+        var keep = next.tabs.map(function (tab) { return tab.id; });
+        Object.keys(d.deletedTabs).forEach(function (id) {
+          if (!next.deletedTabs[id] && keep.indexOf(id) < 0) next.deletedTabs[id] = d.deletedTabs[id];
+        });
+        d.tabs.forEach(function (tab) { if (keep.indexOf(tab.id) < 0) next.deletedTabs[tab.id] = t; });
+        next.tabOrderUpdatedAt = t;
+        replaceContents(d, next);
       });
+    },
+
+    /**
+     * Apply a database produced by sync. Not undoable: older undo snapshots
+     * would no longer line up with the merged data, so history is cleared.
+     */
+    applySynced: function (raw, keepActiveTab) {
+      var next = normalize(raw);
+      if (keepActiveTab && tabById(next, db.activeTabId)) next.activeTabId = db.activeTabId;
+      if (JSON.stringify(next) === JSON.stringify(db)) return false;
+      db = next;
+      undoStack = [];
+      redoStack = [];
+      persist();
+      emit({ synced: true });
+      return true;
+    },
+
+    /** Start over with an empty database, or with `raw` if given (not undoable). */
+    resetDatabase: function (raw) {
+      db = raw ? normalize(raw) : createDatabase();
+      undoStack = [];
+      redoStack = [];
+      persist();
+      emit({ reset: true });
     }
   };
+
+  function replaceContents(target, source) {
+    Object.keys(target).forEach(function (k) { delete target[k]; });
+    Object.keys(source).forEach(function (k) { target[k] = source[k]; });
+  }
 
   global.SOT = global.SOT || {};
   global.SOT.store = Store;

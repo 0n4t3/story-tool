@@ -10,6 +10,8 @@
 
   var store = global.SOT.store;
   var io = global.SOT.io;
+  var sync = global.SOT.sync;
+  var settings = global.SOT.settings;
 
   var $ = function (id) { return document.getElementById(id); };
   var board = $('board');
@@ -162,8 +164,7 @@
         onclick: function () { closeMenu(); item.onSelect(); }
       }, [
         h('span', { class: 'menu-label', text: item.label }),
-        item.hint ? h('span', { class: 'menu-hint', text: item.hint }) : null,
-        item.badge ? h('span', { class: 'menu-badge', text: item.badge }) : null
+        item.hint ? h('span', { class: 'menu-hint', text: item.hint }) : null
       ]));
     });
 
@@ -237,10 +238,7 @@
 
     $('undo-btn').disabled = !store.canUndo();
     $('redo-btn').disabled = !store.canRedo();
-    var err = store.saveError();
-    var status = $('save-status');
-    status.textContent = err ? 'Not saved — storage unavailable' : 'Saved in this browser';
-    status.classList.toggle('is-error', !!err);
+    updateSaveStatus();
 
     document.title = store.activeTab().name + ' — Story Outline Tool';
   }
@@ -623,8 +621,6 @@
         if (el) el.focus();
       }
     });
-    // Click on the backdrop closes the dialog.
-    dialog.addEventListener('click', function (e) { if (e.target === dialog) dialog.close(); });
   })();
 
   function openChapterDialog(tabId, chapterId) {
@@ -675,13 +671,366 @@
   $('undo-btn').addEventListener('click', function () { if (store.undo()) announce('Undone'); });
   $('redo-btn').addEventListener('click', function () { if (store.redo()) announce('Redone'); });
 
-  $('data-btn').addEventListener('click', function (e) {
-    var items = [{ note: 'Your stories are saved automatically in this browser’s local storage.' }, { separator: true }];
-    io.features.forEach(function (f) {
-      items.push({ label: f.label, title: f.description, badge: 'Soon', disabled: true, onSelect: function () {} });
+
+  // ---------------------------------------------------------------------------
+  // Popups: Data, Sync and Settings
+
+  // Close buttons, and clicking the backdrop, close any of the popups.
+  document.querySelectorAll('dialog').forEach(function (dlg) {
+    dlg.addEventListener('click', function (e) {
+      if (e.target === dlg || e.target.closest('[data-close]')) dlg.close();
     });
-    openMenu(e.currentTarget, items);
   });
+
+  // "Copy" buttons next to key fields.
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-copy]');
+    if (!btn) return;
+    var input = $(btn.getAttribute('data-copy'));
+    var done = function () {
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(input.value).then(done, function () { input.select(); });
+    } else {
+      input.select();
+      try { document.execCommand('copy'); done(); } catch (err) { /* leave it selected */ }
+    }
+  });
+
+  /** Run an async action with `button` disabled and showing `busyLabel`. */
+  function busy(button, busyLabel, promise) {
+    var label = button.innerHTML;
+    button.disabled = true;
+    button.classList.add('is-busy');
+    if (busyLabel) button.textContent = busyLabel;
+    return promise.finally(function () {
+      button.disabled = false;
+      button.classList.remove('is-busy');
+      button.innerHTML = label;
+    });
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return 'never';
+    var s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 45) return 'just now';
+    if (s < 90) return 'a minute ago';
+    if (s < 3600) return Math.round(s / 60) + ' minutes ago';
+    if (s < 5400) return 'an hour ago';
+    if (s < 86400) return Math.round(s / 3600) + ' hours ago';
+    return new Date(iso).toLocaleString();
+  }
+
+  function updateSaveStatus() {
+    var el = $('save-status');
+    var st = sync.status();
+    var text = 'Saved in this browser';
+    var title = 'Your outlines are saved in this browser’s local storage';
+    var state = '';
+    if (store.saveError()) {
+      text = 'Not saved: storage unavailable';
+      state = 'error';
+    } else if (st.connected) {
+      if (st.state === 'syncing') { text = 'Syncing…'; state = 'syncing'; }
+      else if (st.state === 'error') { text = 'Sync problem'; title = st.message; state = 'error'; }
+      else if (st.lastSyncedAt) { text = 'Synced'; title = 'Last synced ' + timeAgo(st.lastSyncedAt); state = 'synced'; }
+      else { text = 'Sync on'; }
+    }
+    el.textContent = text;
+    el.title = title;
+    el.dataset.state = state;
+  }
+
+  $('save-status').addEventListener('click', function () {
+    if (sync.status().connected) openSyncDialog();
+    else openDataDialog();
+  });
+
+  // --- Data ---------------------------------------------------------------
+
+  var dataDialog = $('data-dialog');
+
+  function openDataDialog() {
+    renderDataSync();
+    $('markdown-help').hidden = true;
+    $('markdown-help-btn').setAttribute('aria-expanded', 'false');
+    if (!dataDialog.open) dataDialog.showModal();
+  }
+
+  function renderDataSync() {
+    var st = sync.status();
+    $('data-sync-text').textContent = st.connected
+      ? (st.state === 'error' ? 'Sync is on, but the last sync failed: ' + st.message
+        : 'Sync is on. Last synced ' + timeAgo(st.lastSyncedAt) + '.')
+      : 'Keep your stories in sync across devices with end-to-end encryption.';
+  }
+
+  $('data-btn').addEventListener('click', openDataDialog);
+
+  $('export-btn').addEventListener('click', function () {
+    io.exportDatabase();
+    toast('Database exported');
+  });
+
+  $('import-btn').addEventListener('click', function () {
+    var input = $('import-file');
+    input.value = '';
+    input.click();
+  });
+
+  $('import-file').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    io.readDatabaseFile(file).then(function (result) {
+      var msg = 'All local data will be destroyed and replaced with the data in “' + file.name + '” (' +
+        (result.tabCount === 1 ? '1 story' : result.tabCount + ' stories') + ', ' +
+        plural(result.chapterCount, 'chapter') + ').';
+      if (sync.status().connected) msg += ' Your synced data will be updated to match.';
+      return confirmDialog('Replace all local data?', msg, 'Replace data').then(function (ok) {
+        if (!ok) return;
+        store.importDatabase(result.data);
+        dataDialog.close();
+        undoToast('Database imported');
+      });
+    }).catch(function (err) {
+      toast(err.message);
+    });
+  });
+
+  $('sync-open').addEventListener('click', openSyncDialog);
+
+  $('markdown-btn').addEventListener('click', function () {
+    io.exportMarkdown();
+    toast('Exported “' + store.activeTab().name + '” as Markdown');
+  });
+
+  $('markdown-help-btn').addEventListener('click', function (e) {
+    var help = $('markdown-help');
+    help.hidden = !help.hidden;
+    e.currentTarget.setAttribute('aria-expanded', help.hidden ? 'false' : 'true');
+  });
+
+  // --- Sync ---------------------------------------------------------------
+
+  var syncDialog = $('sync-dialog');
+  var METHOD_LABELS = { key: 'Sync key', extension: 'Browser extension', bunker: 'nsec bunker' };
+
+  function openSyncDialog() {
+    showSyncError('');
+    $('sync-generated').hidden = true;
+    $('sync-generated-key').value = '';
+    $('sync-key-input').value = '';
+    $('sync-key-reveal').hidden = true;
+    $('sync-key-value').value = '';
+    renderSyncDialog();
+    $('sync-relays').value = sync.status().relays.join('\n');
+    if (!syncDialog.open) syncDialog.showModal();
+  }
+
+  function showSyncError(message) {
+    var el = $('sync-error');
+    el.textContent = message;
+    el.hidden = !message;
+  }
+
+  function renderSyncDialog() {
+    var st = sync.status();
+    $('sync-signed-out').hidden = st.connected;
+    $('sync-signed-in').hidden = !st.connected;
+    if (!st.connected) return;
+
+    var titles = { syncing: 'Syncing…', synced: 'Synced', error: 'Sync problem', idle: 'Sync on' };
+    $('sync-state-title').textContent = titles[st.state] || 'Sync on';
+    $('sync-state-detail').textContent = st.state === 'error' ? st.message : 'Last synced ' + timeAgo(st.lastSyncedAt) + '.';
+    $('sync-dot').dataset.state = st.state;
+    $('sync-method').textContent = METHOD_LABELS[st.method] || st.method;
+    $('sync-npub').textContent = st.npub.slice(0, 16) + '…' + st.npub.slice(-6);
+    $('sync-npub').title = st.npub;
+    $('sync-show-key').hidden = st.method !== 'key';
+    $('sync-now').disabled = st.state === 'syncing';
+  }
+
+  sync.subscribe(function () {
+    updateSaveStatus();
+    if (syncDialog.open) renderSyncDialog();
+    if (dataDialog.open) renderDataSync();
+    if (settingsDialog.open) renderDeleteOptions();
+  });
+
+  /** Shared handling for the three ways of turning sync on. */
+  function startSync(button, label, promiseFn) {
+    showSyncError('');
+    var p;
+    try { p = promiseFn(); } catch (err) { p = Promise.reject(err); }
+    return busy(button, label, p).then(function () {
+      renderSyncDialog();
+      toast('Sync is on');
+    }, function (err) {
+      renderSyncDialog();
+      showSyncError(err && err.message ? err.message : 'Couldn’t start syncing.');
+    });
+  }
+
+  $('sync-generate').addEventListener('click', function () {
+    var key = sync.generateKey();
+    $('sync-generated-key').value = key.nsec;
+    $('sync-generated').hidden = false;
+    $('sync-generated-key').select();
+  });
+
+  $('sync-generated-use').addEventListener('click', function (e) {
+    var nsec = $('sync-generated-key').value;
+    startSync(e.currentTarget, 'Starting…', function () { return sync.useKey(nsec); });
+  });
+
+  $('sync-key-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var value = $('sync-key-input').value;
+    if (!value.trim()) { $('sync-key-input').focus(); return; }
+    startSync(e.currentTarget.querySelector('button'), 'Connecting…', function () { return sync.useKey(value); })
+      .then(function () { $('sync-key-input').value = ''; });
+  });
+
+  $('sync-extension').addEventListener('click', function (e) {
+    startSync(e.currentTarget, 'Waiting for extension…', function () { return sync.useExtension(); });
+  });
+
+  $('sync-bunker-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var value = $('sync-bunker-input').value;
+    if (!value.trim()) { $('sync-bunker-input').focus(); return; }
+    startSync(e.currentTarget.querySelector('button'), 'Waiting for bunker…', function () { return sync.useBunker(value); });
+  });
+
+  $('sync-now').addEventListener('click', function (e) {
+    showSyncError('');
+    busy(e.currentTarget, 'Syncing…', sync.syncNow()).catch(function () { /* shown in the status */ });
+  });
+
+  $('sync-show-key').addEventListener('click', function () {
+    var reveal = $('sync-key-reveal');
+    reveal.hidden = !reveal.hidden;
+    $('sync-key-value').value = reveal.hidden ? '' : sync.getKey();
+  });
+
+  $('sync-signout').addEventListener('click', function () {
+    var msg = 'This device will stop syncing. Your stories stay in this browser, and your synced data stays on the relays.';
+    if (sync.status().method === 'key') msg += ' To sync again you’ll need your sync key, so make sure it’s saved.';
+    confirmDialog('Stop syncing?', msg, 'Stop syncing').then(function (ok) {
+      if (!ok) return;
+      sync.signOut();
+      openSyncDialog();
+    });
+  });
+
+  $('sync-relays-save').addEventListener('click', function () {
+    sync.setRelays($('sync-relays').value.split(/\s+/));
+    $('sync-relays').value = sync.status().relays.join('\n');
+    toast('Relays saved');
+  });
+  $('sync-relays-reset').addEventListener('click', function () {
+    $('sync-relays').value = sync.DEFAULT_RELAYS.join('\n');
+  });
+
+  // --- Settings -----------------------------------------------------------
+
+  var settingsDialog = $('settings-dialog');
+
+  function openSettingsDialog() {
+    renderThemes();
+    renderDeleteOptions();
+    if (!settingsDialog.open) settingsDialog.showModal();
+  }
+
+  function renderThemes() {
+    var grid = $('theme-grid');
+    var current = settings.theme();
+    grid.textContent = '';
+    settings.THEMES.forEach(function (t) {
+      var input = h('input', { type: 'radio', name: 'theme', value: t.id, checked: t.id === current, class: 'sr-only' });
+      input.addEventListener('change', function () { settings.setTheme(t.id); });
+      grid.appendChild(h('label', { class: 'theme-option', 'data-theme-option': t.id }, [
+        input,
+        h('span', {
+          class: 'theme-preview', 'aria-hidden': 'true',
+          style: '--p0:' + t.preview[0] + ';--p1:' + t.preview[1] + ';--p2:' + t.preview[2]
+        }, [h('span'), h('span'), h('span')]),
+        h('span', { class: 'theme-name', text: t.label })
+      ]));
+    });
+  }
+
+  function renderDeleteOptions() {
+    var connected = sync.status().connected;
+    settingsDialog.querySelector('[data-delete="synced"]').disabled = !connected;
+    $('delete-synced-text').textContent = connected
+      ? 'Erases the synced copy from the relays and stops syncing on this device. Stories in this browser are kept.'
+      : 'Sync isn’t set up on this device, so there’s no synced data to delete from here.';
+    $('delete-local-text').textContent = connected
+      ? 'Clears this browser’s storage, then downloads your synced data again.'
+      : 'Clears this browser’s storage. Sync isn’t set up, so nothing will be downloaded again.';
+  }
+
+  $('settings-btn').addEventListener('click', openSettingsDialog);
+
+  var DELETE_TITLES = { all: 'Delete all data?', synced: 'Delete synced data?', local: 'Delete local data?' };
+
+  settingsDialog.querySelector('.delete-list').addEventListener('click', function (e) {
+    var button = e.target.closest('[data-delete]');
+    if (!button) return;
+    var kind = button.getAttribute('data-delete');
+    confirmDialog(DELETE_TITLES[kind], 'Note: Deleting data is permanent and irreversible. Continue?', 'Delete').then(function (ok) {
+      if (!ok) return;
+      var label = button.textContent;
+      busy(button, 'Deleting…', deleteData(kind)).catch(function (err) {
+        toast((err && err.message) || label + ' failed.');
+      });
+    });
+  });
+
+  /** Remove this app's keys from localStorage, except those listed in `keep`. */
+  function clearLocalStorage(keep) {
+    try {
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+      keys.forEach(function (k) {
+        if (k.indexOf('storyOutlineTool.') === 0 && keep.indexOf(k) < 0) localStorage.removeItem(k);
+      });
+    } catch (err) { /* storage unavailable */ }
+  }
+
+  function deleteData(kind) {
+    var connected = sync.status().connected;
+    if (kind === 'all') {
+      return (connected ? sync.deleteRemote() : Promise.resolve()).then(function () {
+        clearLocalStorage([]);
+        location.reload();
+      });
+    }
+    if (kind === 'synced') {
+      return sync.deleteRemote().then(function () {
+        renderDeleteOptions();
+        toast('Synced data deleted. This device has stopped syncing.');
+      });
+    }
+    // local
+    clearLocalStorage([sync.ACCOUNT_KEY]);
+    settings.apply();
+    store.resetDatabase();
+    renderThemes();
+    if (!connected) {
+      toast('Local data deleted');
+      return Promise.resolve();
+    }
+    return sync.pull().then(function () {
+      toast('Local data deleted and synced data downloaded again');
+    }, function (err) {
+      throw new Error('Local data was deleted, but downloading your synced data failed: ' +
+        ((err && err.message) || 'unknown error') + ' Use “Sync now” to try again.');
+    });
+  }
 
   document.addEventListener('keydown', function (e) {
     if (!(e.ctrlKey || e.metaKey) || isTyping(document.activeElement) || document.querySelector('dialog[open]')) return;
@@ -708,6 +1057,7 @@
 
   store.init();
   store.subscribe(function () { closeMenu(); render(); });
+  sync.init();
   global.SOT.initDrag(board, { onDrop: handleDrop });
   render();
 })(window);

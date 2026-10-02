@@ -1,76 +1,126 @@
 /*
- * Story Outline Tool — import / export / sync.
- *
- * PLACEHOLDERS ONLY. These features are planned but not implemented yet; the
- * UI lists them as "coming soon". Each entry documents the intended behaviour
- * so a future implementation has a clear target.
+ * Story Outline Tool — database files and Markdown export.
  */
 (function (global) {
   'use strict';
 
-  function notImplemented(feature) {
-    return function () {
-      throw new Error(feature + ' is not implemented yet.');
-    };
+  var store = global.SOT.store;
+  var APP_ID = 'story-outline-tool';
+  var FILE_FORMAT = 1;
+
+  function download(filename, text, type) {
+    var blob = new Blob([text], { type: type });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function dateStamp() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function slug(name) {
+    return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'story';
+  }
+
+  /** Download every story as a JSON file that `readDatabaseFile` can load again. */
+  function exportDatabase() {
+    var payload = { app: APP_ID, format: FILE_FORMAT, exportedAt: new Date().toISOString(), data: store.getDb() };
+    download('story-outline-' + dateStamp() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+  }
+
+  /**
+   * Read and validate a database file. Resolves to { data, tabCount, chapterCount }
+   * or rejects with a user-readable Error.
+   */
+  function readDatabaseFile(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('The file could not be read.')); };
+      reader.onload = function () {
+        var parsed;
+        try { parsed = JSON.parse(reader.result); } catch (err) {
+          reject(new Error('That file isn’t a Story Outline Tool database (it isn’t valid JSON).'));
+          return;
+        }
+        // Accept both the wrapped export format and a bare database object.
+        var data = parsed && parsed.app === APP_ID ? parsed.data : parsed;
+        if (!data || !Array.isArray(data.tabs)) {
+          reject(new Error('That file isn’t a Story Outline Tool database.'));
+          return;
+        }
+        var normalized = store.normalize(data);
+        var chapters = normalized.tabs.reduce(function (n, t) { return n + t.order.length; }, 0);
+        resolve({ data: data, tabCount: normalized.tabs.length, chapterCount: chapters });
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  // --- Markdown -------------------------------------------------------------
+
+  /** Escape characters that would otherwise be read as Markdown formatting. */
+  function md(text) {
+    return String(text).replace(/([\\`*_[\]#<>|])/g, '\\$1');
+  }
+
+  function quote(text) {
+    return String(text).split(/\r?\n/).map(function (line) { return '> ' + md(line); }).join('\n');
+  }
+
+  function tabToMarkdown(tab) {
+    var labels = {};
+    store.STATES.forEach(function (s) { labels[s.id] = s.label; });
+    var out = ['# ' + md(tab.name), ''];
+
+    out.push('## Chronological outline', '');
+    if (!tab.order.length) out.push('_No chapters yet._', '');
+    tab.order.forEach(function (id, i) {
+      var ch = tab.chapters[id];
+      var subplots = [];
+      tab.subplots.forEach(function (sp, j) {
+        if (sp.chapterIds.indexOf(id) >= 0) subplots.push(store.letterFor(j));
+      });
+      out.push('### ' + (i + 1) + '. ' + md(ch.name));
+      out.push('');
+      out.push('**State:** ' + labels[ch.state] + (subplots.length ? ' · **Subplots:** ' + subplots.join(', ') : ''));
+      if (ch.summary) out.push('', quote(ch.summary));
+      out.push('');
+    });
+
+    if (tab.subplots.length) {
+      out.push('## Subplots', '');
+      tab.subplots.forEach(function (sp, j) {
+        var letter = store.letterFor(j);
+        out.push('### ' + letter + ': ' + md(sp.name), '');
+        if (!sp.chapterIds.length) out.push('_No chapters._');
+        sp.chapterIds.forEach(function (id, k) {
+          out.push((k + 1) + '. ' + md(tab.chapters[id].name) + ' (Chapter ' + (tab.order.indexOf(id) + 1) + ')');
+        });
+        out.push('');
+      });
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  }
+
+  /** Download the current story as a human-readable Markdown file. */
+  function exportMarkdown() {
+    var tab = store.activeTab();
+    download(slug(tab.name) + '.md', tabToMarkdown(tab), 'text/markdown');
   }
 
   global.SOT = global.SOT || {};
   global.SOT.io = {
-    features: [
-      {
-        id: 'download-db',
-        label: 'Download database',
-        description: 'Save every story as a .json file you can re-upload later.'
-      },
-      {
-        id: 'upload-db',
-        label: 'Upload database',
-        description: 'Restore stories from a previously downloaded .json file.'
-      },
-      {
-        id: 'export-markdown',
-        label: 'Export as Markdown',
-        description: 'A human-readable outline for notes apps or printing.'
-      },
-      {
-        id: 'nostr-sync',
-        label: 'Back up & sync via Nostr',
-        description: 'End-to-end encrypted, app-specific data on Nostr relays.'
-      }
-    ],
-
-    /**
-     * Download the full database (`SOT.store.getDb()`) as JSON, e.g.
-     * `story-outline-YYYY-MM-DD.json`, wrapped as
-     * `{ app: "story-outline-tool", exportedAt, data }`.
-     */
-    downloadDatabase: notImplemented('Downloading the database'),
-
-    /**
-     * Read a file produced by `downloadDatabase`, validate it with
-     * `SOT.store.normalize()` and load it via `SOT.store.replaceDatabase()`
-     * (which keeps it undoable). Should offer replace vs. merge-as-new-tabs.
-     */
-    uploadDatabase: notImplemented('Uploading a database'),
-
-    /**
-     * Render one tab (or all tabs) as Markdown: a heading per story, the
-     * chronological outline as a numbered list with state and summary, then
-     * one section per subplot listing its chapters with their outline numbers.
-     */
-    exportMarkdown: notImplemented('Markdown export'),
-
-    /**
-     * Back up and sync via Nostr: serialize the database, encrypt it to the
-     * user's own key (NIP-44), and publish it as an application-specific data
-     * event (NIP-78, kind 30078, `d` tag "story-outline-tool") to the user's
-     * relays. Sync pulls the newest event, decrypts it and merges by
-     * `updatedAt`.
-     */
-    nostr: {
-      connect: notImplemented('Nostr sync'),
-      backup: notImplemented('Nostr backup'),
-      restore: notImplemented('Nostr restore')
-    }
+    exportDatabase: exportDatabase,
+    readDatabaseFile: readDatabaseFile,
+    exportMarkdown: exportMarkdown,
+    tabToMarkdown: tabToMarkdown
   };
 })(window);

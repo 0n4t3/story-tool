@@ -1,0 +1,62 @@
+/*
+ * Story Outline Tool — per-browser settings (currently just the theme).
+ * The theme is applied before first paint by a small inline script in
+ * index.html; this module handles changing it.
+ */
+(function (global) {
+  'use strict';
+
+  var SETTINGS_KEY = 'storyOutlineTool.settings';
+  var THEMES = [
+    { id: 'light', label: 'Light', preview: ['#f3efe7', '#fffdf9', '#3b5bdb'] },
+    { id: 'dark', label: 'Dark', preview: ['#151311', '#26231f', '#748ffc'] },
+    { id: 'summer', label: 'Summer Waves', preview: ['#dff3f1', '#fffaf0', '#0b7f8c'] },
+    { id: 'sketch', label: 'Sketch', preview: ['#fbfbf6', '#ffffff', '#262626'] }
+  ];
+
+  function read() {
+    try { return JSON.parse(global.localStorage.getItem(SETTINGS_KEY)) || {}; } catch (err) { return {}; }
+  }
+
+  function write(settings) {
+    try { global.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (err) { /* not persisted */ }
+  }
+
+  function systemTheme() {
+    return global.matchMedia && global.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  function isTheme(id) { return THEMES.some(function (t) { return t.id === id; }); }
+
+  /** The chosen theme, or the light/dark one matching the system if none was chosen. */
+  function theme() {
+    var t = read().theme;
+    return isTheme(t) ? t : systemTheme();
+  }
+
+  function apply() { document.documentElement.setAttribute('data-theme', theme()); }
+
+  function setTheme(id) {
+    if (!isTheme(id)) return;
+    var s = read();
+    s.theme = id;
+    write(s);
+    apply();
+  }
+
+  // Follow system light/dark changes until a theme has been picked.
+  if (global.matchMedia) {
+    var mq = global.matchMedia('(prefers-color-scheme: dark)');
+    var onChange = function () { if (!isTheme(read().theme)) apply(); };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+  }
+
+  global.SOT = global.SOT || {};
+  global.SOT.settings = {
+    SETTINGS_KEY: SETTINGS_KEY,
+    THEMES: THEMES,
+    theme: theme,
+    setTheme: setTheme,
+    apply: apply
+  };
+})(window);
