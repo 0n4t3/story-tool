@@ -301,10 +301,10 @@
     board.dataset.tabId = tab.id;
 
     // Which subplots each chapter belongs to, for the tags on outline cards.
-    var memberOf = {};
+    var memberOf = Object.create(null);
     tab.subplots.forEach(function (sp, i) {
       sp.chapterIds.forEach(function (id) {
-        (memberOf[id] = memberOf[id] || []).push({ sp: sp, letter: store.letterFor(i) });
+        (memberOf[id] = memberOf[id] || []).push(sp);
       });
     });
 
@@ -312,7 +312,7 @@
     var subplots = h('div', { class: 'subplots' });
     tab.subplots.forEach(function (sp, i) { subplots.appendChild(renderSubplotColumn(tab, sp, i)); });
     subplots.appendChild(h('button', {
-      type: 'button', class: 'add-subplot', dataset: { focusKey: 'add-subplot' },
+      type: 'button', class: 'add-subplot', dataset: { focusKey: 'add-subplot', navKey: 'add' },
       onclick: function () {
         var id = store.addSubplot(tab.id);
         var col = board.querySelector('[data-subplot-id="' + id + '"]');
@@ -321,7 +321,78 @@
       }
     }, [icon(ICONS.plus), h('span', { text: 'Add subplot' })]));
     board.appendChild(subplots);
+    renderColumnNav(tab);
   }
+
+  // --- Column switcher (narrow screens) ------------------------------------
+
+  var columnNav = $('column-nav');
+
+  /** Chips for the outline and each subplot; tapping one scrolls the board to it. */
+  function renderColumnNav(tab) {
+    columnNav.textContent = '';
+    var items = [{ key: 'main', label: 'Outline' }].concat(tab.subplots.map(function (sp) {
+      return { key: sp.id, label: sp.name, color: sp.color };
+    }));
+    items.forEach(function (item) {
+      columnNav.appendChild(h('button', {
+        type: 'button', dataset: { navKey: item.key },
+        onclick: function () { scrollToColumn(item.key); }
+      }, [
+        item.color ? h('span', { class: 'subplot-dot', style: '--accent:' + item.color, 'aria-hidden': 'true' }) : null,
+        h('span', { text: item.label })
+      ]));
+    });
+    columnNav.appendChild(h('button', {
+      type: 'button', dataset: { navKey: 'add' }, 'aria-label': 'Add subplot',
+      onclick: function () { scrollToColumn('add'); }
+    }, [h('span', { text: '+' })]));
+    updateColumnNav();
+  }
+
+  function columnFor(key) {
+    if (key === 'main') return board.querySelector('.column-main');
+    if (key === 'add') return board.querySelector('.add-subplot');
+    return board.querySelector('[data-subplot-id="' + key + '"]');
+  }
+
+  function scrollToColumn(key) {
+    var el = columnFor(key);
+    if (el) el.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }
+
+  /** Mark the chip for whichever column is closest to the middle of the board. */
+  function updateColumnNav() {
+    if (!columnNav.offsetParent) return; // hidden on wide screens
+    var b = board.getBoundingClientRect();
+    var mid = b.left + b.width / 2;
+    var best = null;
+    var bestDist = Infinity;
+    columnNav.querySelectorAll('button').forEach(function (btn) {
+      var el = columnFor(btn.dataset.navKey);
+      if (!el) return;
+      var r = el.getBoundingClientRect();
+      var dist = Math.abs(r.left + r.width / 2 - mid);
+      if (dist < bestDist) { bestDist = dist; best = btn; }
+    });
+    columnNav.querySelectorAll('button').forEach(function (btn) {
+      btn.setAttribute('aria-current', btn === best ? 'true' : 'false');
+    });
+    if (best) {
+      var nr = columnNav.getBoundingClientRect();
+      var cr = best.getBoundingClientRect();
+      if (cr.left < nr.left || cr.right > nr.right) {
+        columnNav.scrollLeft += cr.left - nr.left - (nr.width - cr.width) / 2;
+      }
+    }
+  }
+
+  var navFrame = 0;
+  board.addEventListener('scroll', function () {
+    cancelAnimationFrame(navFrame);
+    navFrame = requestAnimationFrame(updateColumnNav);
+  }, { passive: true });
+  window.addEventListener('resize', updateColumnNav);
 
   function renderMainColumn(tab, memberOf) {
     var list = h('ol', {
@@ -353,7 +424,6 @@
   }
 
   function renderSubplotColumn(tab, sp, index) {
-    var letter = store.letterFor(index);
     var listKey = 'sub:' + sp.id;
     var list = h('ol', {
       class: 'card-list', 'data-list': listKey, 'aria-label': sp.name,
@@ -365,7 +435,8 @@
       list.appendChild(renderCard(tab, tab.chapters[id], {
         list: listKey,
         subplotId: sp.id,
-        number: letter + (i + 1),
+        subplotName: sp.name,
+        number: String(i + 1),
         chapterNumber: pos + 1,
         outOfOrder: pos < prevPos
       }));
@@ -403,11 +474,11 @@
 
     return h('section', {
       class: 'column column-subplot', 'data-subplot-id': sp.id,
-      style: '--accent:' + sp.color, 'aria-label': 'Subplot ' + letter + ': ' + sp.name
+      style: '--accent:' + sp.color, 'aria-label': 'Subplot: ' + sp.name
     }, [
       h('header', { class: 'column-header' }, [
         h('div', { class: 'column-title-row' }, [
-          h('span', { class: 'subplot-badge', text: letter, 'aria-hidden': 'true' }),
+          h('span', { class: 'subplot-dot', 'aria-hidden': 'true' }),
           nameEl,
           menuBtn
         ]),
@@ -431,13 +502,14 @@
       }));
     }
     if (ctx.tags && ctx.tags.length) {
-      meta.push(h('span', { class: 'card-tags' }, ctx.tags.map(function (t) {
-        return h('span', { class: 'tag', style: '--tag:' + t.sp.color, title: t.sp.name, text: t.letter });
+      meta.push(h('span', { class: 'card-tags' }, ctx.tags.map(function (sp) {
+        return h('span', { class: 'tag', style: '--tag:' + sp.color, title: 'Subplot: ' + sp.name, text: sp.name });
       })));
     }
 
-    var label = (inSubplot ? ctx.number + ', chapter ' + ctx.chapterNumber : 'Chapter ' + ctx.number) +
-      ': ' + ch.name + ', ' + STATE_LABELS[ch.state];
+    var label = (inSubplot ? ctx.subplotName + ' ' + ctx.number + ', chapter ' + ctx.chapterNumber : 'Chapter ' + ctx.number) +
+      ': ' + ch.name + ', ' + STATE_LABELS[ch.state] +
+      (ctx.tags && ctx.tags.length ? ', subplots: ' + ctx.tags.map(function (sp) { return sp.name; }).join(', ') : '');
 
     return h('li', {
       class: 'card', tabindex: '0', role: 'button', 'aria-label': label,
@@ -639,11 +711,11 @@
     if (!tab.subplots.length) {
       checks.appendChild(h('p', { class: 'field-hint', text: 'No subplots yet. Add one from the board.' }));
     }
-    tab.subplots.forEach(function (sp, i) {
+    tab.subplots.forEach(function (sp) {
       var pos = sp.chapterIds.indexOf(chapterId);
       checks.appendChild(h('label', { class: 'subplot-check', style: '--accent:' + sp.color }, [
         h('input', { type: 'checkbox', value: sp.id, checked: pos >= 0 }),
-        h('span', { class: 'subplot-badge', text: store.letterFor(i), 'aria-hidden': 'true' }),
+        h('span', { class: 'subplot-dot', 'aria-hidden': 'true' }),
         h('span', { class: 'subplot-check-name', text: sp.name }),
         pos >= 0 ? h('span', { class: 'field-hint', text: '#' + (pos + 1) }) : null
       ]));
@@ -815,6 +887,12 @@
   // --- Sync ---------------------------------------------------------------
 
   var syncDialog = $('sync-dialog');
+  // Don't leave secret keys sitting in the page after the popup closes.
+  syncDialog.addEventListener('close', function () {
+    ['sync-generated-key', 'sync-key-input', 'sync-key-value'].forEach(function (id) { $(id).value = ''; });
+    $('sync-generated').hidden = true;
+    $('sync-key-reveal').hidden = true;
+  });
   var METHOD_LABELS = { key: 'Sync key', extension: 'Browser extension', bunker: 'nsec bunker' };
 
   function openSyncDialog() {

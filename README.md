@@ -17,9 +17,10 @@ You can also serve the folder with any static file server, for example
 - **Chronological outline.** The left column lists every chapter in story
   order. Chapter numbers come from each chapter's position, so they update
   whenever you reorder.
-- **Subplots.** Each subplot is a column (A, B, C, …). A chapter can be in any
-  number of subplots and stays in the outline too. Subplot cards are numbered
-  within the subplot (`A1`, `A2`, …) and also show their outline chapter
+- **Subplots.** Each subplot is a column with its own name and colour. A
+  chapter can be in any number of subplots and stays in the outline too. Cards
+  in the outline show the names of the subplots they belong to. Subplot cards
+  are numbered within the subplot (1, 2, …) and also show their outline chapter
   (`Ch. 7`). If a subplot's order disagrees with the outline, the chapter
   reference is highlighted. **Sort by outline order** in the subplot's `⋯` menu
   fixes it.
@@ -31,6 +32,10 @@ You can also serve the folder with any static file server, for example
 - **Undo / redo** for every change (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z).
 - **Themes:** Light, Dark, Summer Waves and Sketch, under Settings (gear icon).
   Until you pick one, the app follows your system's light/dark setting.
+
+- **Phones and small screens.** The board shows one column at a time. Swipe
+  sideways to move between columns, or tap a column's name in the bar at the
+  bottom.
 
 ### Moving chapters
 
@@ -76,7 +81,7 @@ If you have the app open in more than one tab, they stay in sync.
 ## Sync
 
 Sync is optional. It uses [Nostr](https://nostr.org/) relays as storage and
-encrypts everything end to end with NIP-44, so relays only ever see ciphertext.
+encrypts story data end to end with NIP-44 before it leaves the browser.
 There's no server of our own.
 
 - **Generate Sync Key:** makes a new Nostr secret key (`nsec1…`) and shows it
@@ -99,6 +104,35 @@ How it works ([`js/sync.js`](js/sync.js)):
 - Default relays are `relay.damus.io`, `nos.lol`, `relay.primal.net` and
   `offchain.pub`. You can change them in the Sync popup once sync is on.
 
+### Security and privacy
+
+- **Encrypted:** everything about your stories: names, chapters, summaries,
+  states, subplots, story order and the list of deleted stories. Each event's
+  content is NIP-44 (v2) encrypted to your own key: ChaCha20 with an HMAC-SHA256
+  tag, keyed by ECDH of your key with itself. Only the holder of the secret key
+  can decrypt it or produce something that decrypts. Events are signed, and the
+  app only accepts events signed by your key.
+- **Not hidden from relays (metadata):** your public key, when you sync, that
+  you use this app (the `d` tags start with `story-outline-tool/`), how many
+  stories you have (each has a random id), and roughly how large each one is.
+- **Who else can read your data:**
+  - Anyone with your sync key.
+  - A browser extension or bunker you sign in with. They do the encryption, so
+    they see the plaintext.
+  - Anyone who can run code in this browser profile. For a generated or entered
+    sync key, the secret key is stored in `localStorage` (see Storage).
+- **Rollback:** a relay can't forge or alter your data, but it could withhold
+  newer versions. Using several relays makes that harder.
+- **Hardening:**
+  - A Content-Security-Policy allows only the app's own scripts, with no
+    inline or remote code.
+  - The app never renders data as HTML.
+  - Imported and synced data is validated: ids, colours and shapes.
+  - Bunker approval links are opened only if they are `https:`.
+  - Relays must use `wss://`, except on `localhost`.
+  - Secret keys are cleared from the Sync popup when it closes.
+  - Exports never include keys.
+
 ## Settings
 
 - **Theme:** Light, Dark, Summer Waves, Sketch. Summer Waves is a copy of the
@@ -119,6 +153,7 @@ How it works ([`js/sync.js`](js/sync.js)):
 ```
 index.html        page structure and popups
 css/styles.css    styles and themes
+js/theme-init.js  applies the saved theme before first paint
 js/settings.js    theme setting
 js/store.js       data model, localStorage persistence, undo/redo
 js/io.js          database import/export, Markdown export

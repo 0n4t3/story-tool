@@ -11,6 +11,10 @@
  * These are replaceable events: a newer one with the same `d` tag replaces the
  * old one on the relay.
  *
+ * What relays can see: the account's public key, event timestamps, the `d`
+ * tags (so: that this app is used, how many stories there are and their
+ * random ids) and the size of each encrypted story. Never names or contents.
+ *
  * Merging: whole tabs, newest `updatedAt` wins. A deletion wins over edits
  * made before it, and loses to edits made after it.
  *
@@ -18,7 +22,8 @@
  *   - "key": a secret key generated here or pasted in (nsec). Kept in this
  *     browser's localStorage.
  *   - "extension": a NIP-07 browser extension (needs NIP-44 support).
- *   - "bunker": a NIP-46 remote signer (bunker:// URI).
+ *   - "bunker": a NIP-46 remote signer (bunker:// URI). Encryption happens in
+ *     the signer, so the signer sees the plaintext.
  */
 (function (global) {
   'use strict';
@@ -31,14 +36,20 @@
   var D_PREFIX = 'story-outline-tool/';
   var D_INDEX = D_PREFIX + 'index';
   var D_TAB = D_PREFIX + 'tab/';
-  var MAX_PLAINTEXT = 65535; // NIP-44 limit
+  // NIP-44 allows 65535 bytes of plaintext, but many relays reject events over
+  // 64 KiB, and base64 ciphertext is ~4/3 the plaintext size.
+  var MAX_PLAINTEXT = 46000;
   var DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net', 'wss://offchain.pub'];
   var AUTO_SYNC_DELAY = 3000;
   var POLL_INTERVAL = 90 * 1000;
+  var QUERY_WAIT = 8000;
+  var D_BATCH = 100;
 
-  // Saved in localStorage: { method, pubkey, sk?, bunker?: { pointer, clientSk }, relays, seen, lastSyncedAt }
-  // `seen[d]` remembers the last version of each event this device merged or
-  // published, so unchanged events are not downloaded and decrypted again.
+  // Saved in localStorage:
+  //   { method, pubkey, sk?, bunker?: { pointer, clientSk }, relays, seen, tabIds, lastSyncedAt }
+  // `seen[d]` is the last version ({ id, created_at, stamp }) of each event
+  // this device merged or published, so unchanged events aren't decrypted
+  // again. `tabIds` are the story ids the synced index last listed.
   var account = null;
   var signer = null;
   var pool = null;
@@ -46,9 +57,16 @@
   var listeners = [];
   var running = null;
   var rerun = false;
+  var paused = false;
   var timer = 0;
+  // Bumped whenever the account changes; an in-flight sync for an older
+  // generation stops at its next step instead of writing anything.
+  var generation = 0;
+  var CANCELLED = { cancelled: true };
 
   // --- helpers --------------------------------------------------------------
+
+  function noop() {}
 
   function bytesToHex(bytes) {
     return Array.prototype.map.call(bytes, function (b) { return (b < 16 ? '0' : '') + b.toString(16); }).join('');
@@ -80,6 +98,8 @@
     })]);
   }
   function nowSeconds() { return Math.floor(Date.now() / 1000); }
+  function isPubkey(pk) { return typeof pk === 'string' && /^[0-9a-f]{64}$/.test(pk); }
+  function unique(list) { return list.filter(function (x, i) { return x && list.indexOf(x) === i; }); }
 
   function emit() { listeners.forEach(function (fn) { fn(getStatus()); }); }
   function setStatus(state, message) {
@@ -94,16 +114,22 @@
     } catch (err) { /* storage unavailable: sync still works for this session */ }
   }
 
+  function parseAccount(raw) {
+    var a;
+    try { a = raw ? JSON.parse(raw) : null; } catch (err) { a = null; }
+    if (!a || !isPubkey(a.pubkey) || ['key', 'extension', 'bunker'].indexOf(a.method) < 0) return null;
+    if (a.method === 'key' && !/^[0-9a-f]{64}$/.test(a.sk || '')) return null;
+    if (a.method === 'bunker' && !(a.bunker && a.bunker.pointer && /^[0-9a-f]{64}$/.test(a.bunker.clientSk || ''))) return null;
+    a.seen = a.seen && typeof a.seen === 'object' ? a.seen : {};
+    a.tabIds = Array.isArray(a.tabIds) ? a.tabIds : [];
+    a.relays = Array.isArray(a.relays) && a.relays.length ? a.relays : DEFAULT_RELAYS.slice();
+    return a;
+  }
+
   function loadAccount() {
-    try {
-      var raw = global.localStorage.getItem(ACCOUNT_KEY);
-      account = raw ? JSON.parse(raw) : null;
-    } catch (err) { account = null; }
-    if (account && (!account.pubkey || !account.method)) account = null;
-    if (account) {
-      account.seen = account.seen || {};
-      account.relays = account.relays && account.relays.length ? account.relays : DEFAULT_RELAYS.slice();
-    }
+    var raw = null;
+    try { raw = global.localStorage.getItem(ACCOUNT_KEY); } catch (err) { raw = null; }
+    account = parseAccount(raw);
   }
 
   function relays() { return (account && account.relays) || DEFAULT_RELAYS; }
@@ -170,7 +196,12 @@
     };
   }
 
-  function openAuthUrl(url) { global.open(url, '_blank', 'noopener'); }
+  /** Bunkers may ask the user to approve in a web page. Only ever open https pages. */
+  function openAuthUrl(url) {
+    var u;
+    try { u = new URL(url); } catch (err) { return; }
+    if (u.protocol === 'https:') global.open(u.href, '_blank', 'noopener,noreferrer');
+  }
 
   function wrapBunker(bs, pubkey) {
     return {
@@ -202,15 +233,27 @@
     return null;
   }
 
-  /** Newest event per `d` tag for this app, keyed by `d`. */
-  function fetchLatest(pubkey) {
-    return getPool().querySync(relays(), { kinds: [KIND], authors: [pubkey] }, { maxWait: 8000 }).then(function (events) {
+  /**
+   * Newest event for each of the given `d` tags, keyed by `d`. Queries by
+   * exact `d` tag so that other apps' kind-30078 events on the same account
+   * can't crowd ours out of a relay's result limit.
+   */
+  function query(pubkey, ds) {
+    var batches = [];
+    for (var i = 0; i < ds.length; i += D_BATCH) batches.push(ds.slice(i, i + D_BATCH));
+    return Promise.all(batches.map(function (batch) {
+      return getPool().querySync(relays(), { kinds: [KIND], authors: [pubkey], '#d': batch }, { maxWait: QUERY_WAIT });
+    })).then(function (results) {
       var latest = {};
-      events.forEach(function (ev) {
-        var d = dTag(ev);
-        if (!d || d.indexOf(D_PREFIX) !== 0) return;
-        var cur = latest[d];
-        if (!cur || ev.created_at > cur.created_at || (ev.created_at === cur.created_at && ev.id < cur.id)) latest[d] = ev;
+      results.forEach(function (events) {
+        events.forEach(function (ev) {
+          // nostr-tools already checks signatures and the filter; this is a second line of defence.
+          if (ev.pubkey !== pubkey || ev.kind !== KIND) return;
+          var d = dTag(ev);
+          if (!d || ds.indexOf(d) < 0) return;
+          var cur = latest[d];
+          if (!cur || ev.created_at > cur.created_at || (ev.created_at === cur.created_at && ev.id < cur.id)) latest[d] = ev;
+        });
       });
       return latest;
     });
@@ -222,26 +265,32 @@
     return s.decrypt(ev.content).then(unpack).catch(function () { return null; });
   }
 
+  function isNewer(ev, prev) {
+    return !prev || ev.created_at > prev.created_at || (ev.created_at === prev.created_at && ev.id !== prev.id);
+  }
+
   function publishEvent(s, template) {
     return s.sign(template).then(function (ev) {
-      var attempts = getPool().publish(relays(), ev, { maxWait: 8000 });
-      return Promise.any(attempts).catch(function () {
+      var attempts = getPool().publish(relays(), ev, { maxWait: QUERY_WAIT });
+      return Promise.any(attempts).then(function () { return ev; }, function () {
         throw new Error('None of the sync relays accepted the update. Check your connection and try again.');
       });
     });
   }
 
-  function nextCreatedAt(d) {
-    var prev = account.seen[d];
-    return Math.max(nowSeconds(), prev ? prev.created_at + 1 : 0);
-  }
-
-  function publishPayload(s, d, payload, stamp, label) {
-    var createdAt = nextCreatedAt(d);
-    return pack(payload, label).then(s.encrypt).then(function (content) {
-      return publishEvent(s, { kind: KIND, created_at: createdAt, tags: [['d', d]], content: content });
-    }).then(function () {
-      account.seen[d] = { created_at: createdAt, stamp: stamp };
+  function publishPayload(ctx, d, payload, stamp, label) {
+    var acct = ctx.account;
+    var prev = acct.seen[d];
+    var createdAt = Math.max(nowSeconds(), prev ? prev.created_at + 1 : 0);
+    return pack(payload, label).then(function (text) {
+      ctx.check();
+      return ctx.signer.encrypt(text);
+    }).then(function (content) {
+      ctx.check();
+      return publishEvent(ctx.signer, { kind: KIND, created_at: createdAt, tags: [['d', d]], content: content });
+    }).then(function (ev) {
+      ctx.check();
+      acct.seen[d] = { id: ev.id, created_at: createdAt, stamp: stamp };
       saveAccount();
     });
   }
@@ -258,31 +307,65 @@
     return { tabOrder: db.tabs.map(function (t) { return t.id; }), tabOrderUpdatedAt: db.tabOrderUpdatedAt, deletedTabs: db.deletedTabs };
   }
 
+  function idsFromIndex(index) {
+    if (!index || typeof index !== 'object') return [];
+    var ids = Array.isArray(index.tabOrder) ? index.tabOrder.slice() : [];
+    if (index.deletedTabs && typeof index.deletedTabs === 'object') ids = ids.concat(Object.keys(index.deletedTabs));
+    return ids.filter(function (id) { return typeof id === 'string'; });
+  }
+
+  /** Every story id that might have an event: from the synced index, and local stories and deletions. */
+  function knownTabDs(acct) {
+    var db = store.getDb();
+    var ids = acct.tabIds
+      .concat(db.tabs.map(function (t) { return t.id; }))
+      .concat(Object.keys(db.deletedTabs || {}));
+    return unique(ids).map(function (id) { return D_TAB + id; });
+  }
+
   /**
    * Download and decrypt remote events. With `all` false, only events that
    * changed since this device last saw them are decrypted.
    */
-  function readRemote(s, all) {
-    return fetchLatest(s.pubkey).then(function (latest) {
-      var remote = { index: null, tabs: {}, deleted: {} };
-      var seen = all ? {} : account.seen;
+  function readRemote(ctx, all) {
+    var acct = ctx.account;
+    var s = ctx.signer;
+    var seen = all ? {} : acct.seen;
+    var remote = { index: null, tabs: {}, deleted: {} };
+
+    function record(d, ev, payload) {
+      acct.seen[d] = { id: ev.id, created_at: ev.created_at, stamp: stampFor(d, payload) };
+    }
+
+    return query(s.pubkey, [D_INDEX]).then(function (latest) {
+      ctx.check();
+      var ev = latest[D_INDEX];
+      if (!ev || !isNewer(ev, seen[D_INDEX])) return null;
+      return open(s, ev).then(function (payload) {
+        record(D_INDEX, ev, payload);
+        if (payload) {
+          remote.index = payload;
+          acct.tabIds = unique(idsFromIndex(payload));
+        }
+      });
+    }).then(function () {
+      ctx.check();
+      return query(s.pubkey, knownTabDs(acct));
+    }).then(function (latest) {
+      ctx.check();
       var jobs = Object.keys(latest).map(function (d) {
         var ev = latest[d];
-        var prev = seen[d];
-        if (prev && prev.created_at >= ev.created_at) return null;
+        if (!isNewer(ev, seen[d])) return null;
         return open(s, ev).then(function (payload) {
-          account.seen[d] = { created_at: ev.created_at, stamp: stampFor(d, payload) };
+          record(d, ev, payload);
           if (!payload) return;
-          if (d === D_INDEX) remote.index = payload;
-          else if (d.indexOf(D_TAB) === 0) {
-            var id = d.slice(D_TAB.length);
-            if (payload.tab && payload.tab.id === id) remote.tabs[id] = payload.tab;
-            else if (payload.deletedAt) remote.deleted[id] = payload.deletedAt;
-          }
+          var id = d.slice(D_TAB.length);
+          if (payload.tab && payload.tab.id === id) remote.tabs[id] = payload.tab;
+          else if (typeof payload.deletedAt === 'string') remote.deleted[id] = payload.deletedAt;
         });
       });
-      return Promise.all(jobs).then(function () { return remote; });
-    });
+      return Promise.all(jobs);
+    }).then(function () { return remote; });
   }
 
   // --- merging --------------------------------------------------------------
@@ -290,9 +373,11 @@
   function merge(local, remote) {
     var db = JSON.parse(JSON.stringify(local));
     var tombs = db.deletedTabs || {};
-    function addTomb(id, t) { if (t && (!tombs[id] || t > tombs[id])) tombs[id] = t; }
+    function addTomb(id, t) {
+      if (typeof t === 'string' && (!Object.prototype.hasOwnProperty.call(tombs, id) || t > tombs[id])) tombs[id] = t;
+    }
     Object.keys(remote.deleted).forEach(function (id) { addTomb(id, remote.deleted[id]); });
-    if (remote.index && remote.index.deletedTabs) {
+    if (remote.index && remote.index.deletedTabs && typeof remote.index.deletedTabs === 'object') {
       Object.keys(remote.index.deletedTabs).forEach(function (id) { addTomb(id, remote.index.deletedTabs[id]); });
     }
 
@@ -300,27 +385,24 @@
       var r = remote.tabs[id];
       var i = db.tabs.findIndex(function (t) { return t.id === id; });
       if (i < 0) db.tabs.push(r);
-      else if (r.updatedAt > db.tabs[i].updatedAt) db.tabs[i] = r;
+      else if (String(r.updatedAt) > String(db.tabs[i].updatedAt)) db.tabs[i] = r;
     });
 
     db.tabs = db.tabs.filter(function (t) {
-      var deletedAt = tombs[t.id];
-      if (deletedAt && deletedAt >= t.updatedAt) return false;
+      var deletedAt = Object.prototype.hasOwnProperty.call(tombs, t.id) ? tombs[t.id] : null;
+      if (deletedAt && deletedAt >= String(t.updatedAt)) return false;
       if (deletedAt) delete tombs[t.id]; // edited after it was deleted elsewhere: keep it
       return true;
     });
     db.deletedTabs = tombs;
 
     var idx = remote.index;
-    if (idx && Array.isArray(idx.tabOrder) && (idx.tabOrderUpdatedAt || '') > (db.tabOrderUpdatedAt || '')) {
-      var pos = {};
-      idx.tabOrder.forEach(function (id, i) { pos[id] = i; });
+    if (idx && Array.isArray(idx.tabOrder) && String(idx.tabOrderUpdatedAt || '') > String(db.tabOrderUpdatedAt || '')) {
+      var pos = new Map();
+      idx.tabOrder.forEach(function (id, i) { pos.set(id, i); });
       var before = db.tabs.slice();
-      db.tabs.sort(function (a, b) {
-        var pa = a.id in pos ? pos[a.id] : 1e6 + before.indexOf(a);
-        var pb = b.id in pos ? pos[b.id] : 1e6 + before.indexOf(b);
-        return pa - pb;
-      });
+      var rank = function (t) { return pos.has(t.id) ? pos.get(t.id) : 1e6 + before.indexOf(t); };
+      db.tabs.sort(function (a, b) { return rank(a) - rank(b); });
       db.tabOrderUpdatedAt = idx.tabOrderUpdatedAt;
     }
     return db;
@@ -334,82 +416,120 @@
 
   // --- sync runs ------------------------------------------------------------
 
+  /** Snapshot of the account/signer for one run, plus a check that it is still current. */
+  function context() {
+    var gen = generation;
+    var ctx = { account: account, signer: getSigner() };
+    ctx.check = function () { if (gen !== generation || ctx.account !== account) throw CANCELLED; };
+    return ctx;
+  }
+
   /**
    * mode "merge": combine local and remote data and upload what changed.
    * mode "pull": replace local data with what's on the relays.
+   * Runs never overlap: a merge requested during a run is folded into one
+   * follow-up merge; a pull waits for the current run to finish.
    */
   function run(mode) {
-    if (running) { rerun = true; return running; }
+    if (running) {
+      if (mode === 'merge') { rerun = true; return running; }
+      return running.then(noop, noop).then(function () { return run(mode); });
+    }
+    if (!account) return Promise.reject(new Error('Sync isn’t set up.'));
     clearTimeout(timer);
+    var gen = generation;
+    var ctx;
     setStatus('syncing');
-    var s;
     running = Promise.resolve().then(function () {
-      s = getSigner();
-      return readRemote(s, mode === 'pull');
+      ctx = context();
+      return readRemote(ctx, mode === 'pull');
     }).then(function (remote) {
+      ctx.check();
       if (mode === 'pull') {
         var pulled = merge({ tabs: [], deletedTabs: {}, tabOrderUpdatedAt: '' }, remote);
-        if (!pulled.tabs.length) pulled = null;
-        store.resetDatabase(pulled);
+        store.resetDatabase(pulled.tabs.length ? pulled : null);
       } else {
         store.applySynced(merge(store.getDb(), remote), true);
       }
-      return upload(s);
+      return upload(ctx);
     }).then(function () {
-      account.lastSyncedAt = new Date().toISOString();
+      ctx.check();
+      ctx.account.lastSyncedAt = new Date().toISOString();
       saveAccount();
       setStatus('synced');
-    }, function (err) {
+    }).catch(function (err) {
+      if (err === CANCELLED || gen !== generation) return;
       setStatus('error', (err && err.message) || 'Sync failed.');
       throw err;
     }).finally(function () {
       running = null;
-      if (rerun && account) { rerun = false; schedule(0); }
+      if (rerun && account && !paused) { rerun = false; schedule(0); }
     });
     return running;
   }
 
-  function upload(s) {
+  function upload(ctx) {
     var db = store.getDb();
-    var seen = account.seen;
+    var seen = ctx.account.seen;
     var tasks = [];
     db.tabs.forEach(function (tab) {
       var d = D_TAB + tab.id;
       if (!seen[d] || seen[d].stamp !== tab.updatedAt) {
-        tasks.push(function () { return publishPayload(s, d, { tab: tab }, tab.updatedAt, tab.name); });
+        var snapshot = JSON.parse(JSON.stringify(tab));
+        tasks.push(function () { return publishPayload(ctx, d, { tab: snapshot }, snapshot.updatedAt, snapshot.name); });
       }
     });
     Object.keys(db.deletedTabs).forEach(function (id) {
       var d = D_TAB + id;
-      var stamp = 'deleted:' + db.deletedTabs[id];
+      var deletedAt = db.deletedTabs[id];
+      var stamp = 'deleted:' + deletedAt;
       // Only tabs that were synced at some point need a deletion marker.
       if (seen[d] && seen[d].stamp && seen[d].stamp !== stamp) {
-        tasks.push(function () { return publishPayload(s, d, { deletedAt: db.deletedTabs[id] }, stamp); });
+        tasks.push(function () { return publishPayload(ctx, d, { deletedAt: deletedAt }, stamp); });
       }
     });
-    var index = indexPayload(db);
+    var index = JSON.parse(JSON.stringify(indexPayload(db)));
     var indexStamp = hash(JSON.stringify(index));
     if (!seen[D_INDEX] || seen[D_INDEX].stamp !== indexStamp) {
-      tasks.push(function () { return publishPayload(s, D_INDEX, index, indexStamp); });
+      tasks.push(function () {
+        return publishPayload(ctx, D_INDEX, index, indexStamp).then(function () {
+          ctx.account.tabIds = unique(idsFromIndex(index));
+          saveAccount();
+        });
+      });
     }
     // One at a time, so a signer extension or bunker isn't flooded with requests.
     return tasks.reduce(function (p, task) { return p.then(task); }, Promise.resolve());
   }
 
   function schedule(delay) {
-    if (!account) return;
+    if (!account || paused) return;
     clearTimeout(timer);
-    timer = setTimeout(function () { run('merge').catch(function () { /* shown via status */ }); }, delay);
+    timer = setTimeout(function () { run('merge').catch(noop); }, delay);
+  }
+
+  /** Forget the account on this device (in memory; the caller decides about storage). */
+  function forget() {
+    generation++;
+    clearTimeout(timer);
+    rerun = false;
+    if (signer && signer.close) signer.close().catch(noop);
+    signer = null;
+    account = null;
   }
 
   function connect(next, firstSigner) {
+    forget();
+    paused = false;
+    next.seen = {};
+    next.tabIds = [];
+    next.relays = next.relays || DEFAULT_RELAYS.slice();
     account = next;
-    account.seen = {};
-    account.relays = account.relays || DEFAULT_RELAYS.slice();
     signer = firstSigner || null;
     saveAccount();
     // On a fresh device, take the synced data as-is instead of adding an empty story to it.
-    return run(isPristine(store.getDb()) ? 'pull' : 'merge');
+    var mode = isPristine(store.getDb()) ? 'pull' : 'merge';
+    return (running || Promise.resolve()).then(noop, noop).then(function () { return run(mode); });
   }
 
   // --- public API -----------------------------------------------------------
@@ -435,7 +555,7 @@
       loadAccount();
       if (account) setStatus('idle');
       store.subscribe(function (meta) {
-        if (meta.synced || meta.external || meta.reset) return;
+        if (meta.synced || meta.external || meta.reset || meta.navigation) return;
         schedule(AUTO_SYNC_DELAY);
       });
       document.addEventListener('visibilitychange', function () {
@@ -444,6 +564,22 @@
       setInterval(function () {
         if (document.visibilityState === 'visible' && !running) schedule(0);
       }, POLL_INTERVAL);
+      // Follow sign-ins and sign-outs made in another open tab of the app.
+      global.addEventListener('storage', function (e) {
+        if (e.key !== ACCOUNT_KEY && e.key !== null) return;
+        var next = parseAccount(e.key === null ? null : e.newValue);
+        if (!next) {
+          if (account) { forget(); setStatus('off'); }
+        } else if (!account || next.pubkey !== account.pubkey || next.method !== account.method) {
+          forget();
+          account = next;
+          setStatus('idle');
+          schedule(500);
+        } else {
+          account.relays = next.relays;
+          emit();
+        }
+      });
       schedule(300);
     },
 
@@ -470,7 +606,10 @@
         }
         skHex = bytesToHex(decoded.data);
       }
-      var s = localSigner(skHex);
+      var s;
+      try { s = localSigner(skHex); } catch (err) {
+        return Promise.reject(new Error('That sync key isn’t valid.'));
+      }
       return connect({ method: 'key', sk: skHex, pubkey: s.pubkey }, s);
     },
 
@@ -480,6 +619,7 @@
       var ext = global.nostr;
       if (!ext) return Promise.reject(new Error('No Nostr browser extension was found. Install or unlock one, then try again.'));
       return Promise.resolve(ext.getPublicKey()).then(function (pubkey) {
+        if (!isPubkey(pubkey)) throw new Error('Your Nostr extension returned an invalid public key.');
         var s = extensionSigner(pubkey);
         return connect({ method: 'extension', pubkey: pubkey }, s);
       });
@@ -494,11 +634,12 @@
         return withTimeout(bs.connect(), 60000, 'The bunker didn’t respond. Check that it’s online and approve the connection there.')
           .then(function () { return bs.getPublicKey(); })
           .then(function (pubkey) {
+            if (!isPubkey(pubkey)) throw new Error('The bunker returned an invalid public key.');
             return connect({ method: 'bunker', pubkey: pubkey, bunker: { pointer: pointer, clientSk: bytesToHex(clientSk) } },
               wrapBunker(bs, pubkey));
           });
       }).catch(function (err) {
-        if (bs) bs.close().catch(function () {});
+        if (bs && !(account && account.method === 'bunker')) bs.close().catch(noop);
         throw err;
       });
     },
@@ -515,7 +656,10 @@
 
     setRelays: function (list) {
       if (!account) return;
-      var clean = list.map(function (r) { return r.trim(); }).filter(function (r) { return /^wss?:\/\/\S+$/.test(r); });
+      var clean = unique(list.map(function (r) { return r.trim(); }).filter(function (r) {
+        // Plain ws:// only for relays on this machine; anything else must use TLS.
+        return /^wss:\/\/[^\s/]+/.test(r) || /^ws:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/\S*)?$/.test(r);
+      }));
       account.relays = clean.length ? clean : DEFAULT_RELAYS.slice();
       account.seen = {}; // new relays may not have everything: re-check all events
       saveAccount();
@@ -525,10 +669,8 @@
 
     /** Stop syncing on this device. Local data and synced data are both kept. */
     signOut: function () {
-      clearTimeout(timer);
-      if (signer && signer.close) signer.close().catch(function () {});
-      signer = null;
-      account = null;
+      forget();
+      paused = false;
       saveAccount();
       setStatus('off');
     },
@@ -539,30 +681,45 @@
      */
     deleteRemote: function () {
       if (!account) return Promise.resolve();
+      // Stop automatic syncs and let any in-flight one finish first, so nothing
+      // is re-uploaded after the deletion.
+      paused = true;
       clearTimeout(timer);
-      var s;
-      setStatus('syncing');
-      return Promise.resolve().then(function () {
-        s = getSigner();
-        return fetchLatest(s.pubkey);
+      rerun = false;
+      var ctx;
+      return (running || Promise.resolve()).then(noop, noop).then(function () {
+        if (!account) throw new Error('Sync isn’t set up.');
+        setStatus('syncing');
+        ctx = context();
+        return query(ctx.signer.pubkey, [D_INDEX]);
+      }).then(function (latest) {
+        var ev = latest[D_INDEX];
+        return ev ? open(ctx.signer, ev) : null;
+      }).then(function (index) {
+        ctx.account.tabIds = unique(ctx.account.tabIds.concat(idsFromIndex(index)));
+        return query(ctx.signer.pubkey, [D_INDEX].concat(knownTabDs(ctx.account)));
       }).then(function (latest) {
         var ds = Object.keys(latest);
         if (!ds.length) return null;
         var t = nowSeconds();
         var chain = ds.reduce(function (p, d) {
           return p.then(function () {
-            return publishEvent(s, { kind: KIND, created_at: Math.max(t, latest[d].created_at + 1), tags: [['d', d]], content: '' });
+            ctx.check();
+            return publishEvent(ctx.signer, { kind: KIND, created_at: Math.max(t, latest[d].created_at + 1), tags: [['d', d]], content: '' });
           });
         }, Promise.resolve());
         return chain.then(function () {
-          return publishEvent(s, {
-            kind: 5, created_at: nowSeconds(), content: 'Deleted by Story Outline Tool',
-            tags: ds.map(function (d) { return ['a', KIND + ':' + s.pubkey + ':' + d]; }).concat([['k', String(KIND)]])
+          ctx.check();
+          return publishEvent(ctx.signer, {
+            kind: 5, created_at: nowSeconds(), content: '',
+            tags: ds.map(function (d) { return ['a', KIND + ':' + ctx.signer.pubkey + ':' + d]; }).concat([['k', String(KIND)]])
           });
         });
       }).then(function () {
         Sync.signOut();
       }, function (err) {
+        paused = false;
+        if (err === CANCELLED) return;
         setStatus('error', (err && err.message) || 'Deleting synced data failed.');
         throw err;
       });
