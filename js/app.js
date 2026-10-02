@@ -666,6 +666,12 @@
     var btn = tabList.querySelector('.tab.is-active .tab-name');
     if (btn) renameTab(store.activeTab(), btn);
   });
+  // Let a regular mouse wheel scroll the tab strip sideways when it overflows.
+  tabList.addEventListener('wheel', function (e) {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || tabList.scrollWidth <= tabList.clientWidth) return;
+    e.preventDefault();
+    tabList.scrollLeft += e.deltaY;
+  }, { passive: false });
   $('undo-btn').addEventListener('click', function () { if (store.undo()) announce('Undone'); });
   $('redo-btn').addEventListener('click', function () { if (store.redo()) announce('Redone'); });
 
