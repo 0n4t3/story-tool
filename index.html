@@ -40,9 +40,9 @@
       <button type="button" class="icon-btn" id="redo-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m13 5 4 4-4 4"/><path d="M17 9H8a5 5 0 0 0 0 10h2"/></svg>
       </button>
-      <button type="button" class="btn" id="data-btn" aria-haspopup="dialog">
+      <button type="button" class="btn" id="data-btn" aria-haspopup="dialog" aria-label="Data" title="Data">
         <svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5"/><path d="M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5"/></svg>
-        Data
+        <span class="btn-label">Data</span>
       </button>
       <button type="button" class="icon-btn" id="settings-btn" aria-haspopup="dialog" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.6"/><path d="M10 1.8v2.4M10 15.8v2.4M1.8 10h2.4M15.8 10h2.4M4.2 4.2l1.7 1.7M14.1 14.1l1.7 1.7M4.2 15.8l1.7-1.7M14.1 5.9l1.7-1.7"/><circle cx="10" cy="10" r="5.6"/></svg>
@@ -51,6 +51,7 @@
   </header>
 
   <main class="board" id="board" aria-label="Story outline"></main>
+  <nav class="column-nav" id="column-nav" aria-label="Jump to column"></nav>
 
   <dialog class="dialog" id="chapter-dialog" aria-labelledby="chapter-dialog-title">
     <form method="dialog" id="chapter-form">
@@ -178,7 +179,6 @@
               <input type="text" id="sync-bunker-input" placeholder="bunker://…" autocomplete="off" spellcheck="false" aria-label="nsec bunker address">
               <button type="submit" class="btn">Connect</button>
             </form>
-            <p class="panel-text signin-note">With an extension or bunker, encryption happens in that signer, so it can read your stories too. Only use one you trust.</p>
           </div>
         </section>
       </div>

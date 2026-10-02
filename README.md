@@ -17,9 +17,10 @@ You can also serve the folder with any static file server, for example
 - **Chronological outline.** The left column lists every chapter in story
   order. Chapter numbers come from each chapter's position, so they update
   whenever you reorder.
-- **Subplots.** Each subplot is a column (A, B, C, …). A chapter can be in any
-  number of subplots and stays in the outline too. Subplot cards are numbered
-  within the subplot (`A1`, `A2`, …) and also show their outline chapter
+- **Subplots.** Each subplot is a column with its own name and colour. A
+  chapter can be in any number of subplots and stays in the outline too. Cards
+  in the outline show the names of the subplots they belong to. Subplot cards
+  are numbered within the subplot (1, 2, …) and also show their outline chapter
   (`Ch. 7`). If a subplot's order disagrees with the outline, the chapter
   reference is highlighted. **Sort by outline order** in the subplot's `⋯` menu
   fixes it.
@@ -31,6 +32,10 @@ You can also serve the folder with any static file server, for example
 - **Undo / redo** for every change (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z).
 - **Themes:** Light, Dark, Summer Waves and Sketch, under Settings (gear icon).
   Until you pick one, the app follows your system's light/dark setting.
+
+- **Phones and small screens.** The board shows one column at a time. Swipe
+  sideways to move between columns, or tap a column's name in the bar at the
+  bottom.
 
 ### Moving chapters
 

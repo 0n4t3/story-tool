@@ -365,18 +365,19 @@ a.btn { text-decoration: none; }
 .column-header .inline-input { flex: 1; min-width: 0; }
 .column-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-.subplot-badge {
-  display: inline-grid; place-items: center; flex: none;
-  min-width: 22px; height: 22px; padding: 0 5px;
-  border-radius: 6px;
-  background: var(--accent); color: #fff;
-  font-size: 12px; font-weight: 700;
+.subplot-dot {
+  flex: none; width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .card-list {
   flex: 1 1 auto; min-height: 64px;
   list-style: none; margin: 0; padding: 4px 10px 10px;
-  overflow-y: auto; overscroll-behavior: contain;
+  /* Vertical scrolling stays inside the list, but sideways swipes must reach
+     the board (overflow-y: auto makes the list a scroll container on x too). */
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain;
   display: flex; flex-direction: column; gap: 8px;
   scrollbar-width: thin;
 }
@@ -474,13 +475,21 @@ a.btn { text-decoration: none; }
 .card-chapter-ref.is-out-of-order { color: var(--state-drafting); font-weight: 600; }
 .card-chapter-ref.is-out-of-order::after { content: " ↑"; }
 
-.card-tags { display: inline-flex; gap: 3px; }
+.card-tags { display: contents; }
+/* Subplot a chapter belongs to: its name, with the subplot's colour as a dot. */
 .tag {
-  display: inline-grid; place-items: center;
-  min-width: 18px; height: 18px; padding: 0 4px;
-  border-radius: 5px;
-  background: var(--tag); color: #fff;
-  font-size: 10.5px; font-weight: 700;
+  display: inline-block; max-width: 160px; height: 20px;
+  padding: 0 8px 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tag) 15%, transparent);
+  color: var(--text);
+  font-size: 11.5px; font-weight: 600; line-height: 20px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tag::before {
+  content: ""; display: inline-block;
+  width: 6px; height: 6px; margin-right: 5px; vertical-align: 1px;
+  border-radius: 50%; background: var(--tag);
 }
 
 .card-remove {
@@ -624,7 +633,6 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .signin-options { display: flex; flex-direction: column; gap: 8px; }
 .signin-options .btn { align-self: flex-start; }
 .signin-options .or { font-size: 12px; color: var(--muted); }
-.signin-options .signin-note { margin: 2px 0 0; font-size: 12px; }
 
 .sync-state { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
 .sync-state .panel-text { margin: 0; }
@@ -763,26 +771,76 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 [data-theme="sketch"] .tab.is-active { border-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 [data-theme="sketch"] .app-header { border-bottom: 2px solid var(--border); }
 [data-theme="sketch"] .state-pill { border: 1.5px solid currentColor; background: transparent; }
-[data-theme="sketch"] .subplot-badge,
-[data-theme="sketch"] .tag { border-radius: 40% 10% 35% 10%; }
+[data-theme="sketch"] .subplot-dot { border-radius: 45% 55% 40% 60%; }
+[data-theme="sketch"] .tag { border: 1.5px solid var(--tag); background: transparent; line-height: 17px; border-radius: var(--wobble); }
 [data-theme="sketch"] .drop-placeholder { border-radius: var(--wobble); }
 [data-theme="sketch"] body { font-size: 15.5px; }
 [data-theme="sketch"] .column-title,
 [data-theme="sketch"] .card-title { letter-spacing: 0.01em; }
 
+/* Column switcher: only shown on narrow screens (see Mobile below). */
+.column-nav { display: none; }
+
 /* ------------------------------------------------------------------- Mobile */
 
 @media (max-width: 760px) {
-  .app-header { flex-wrap: wrap; height: auto; padding: 8px 16px 0; row-gap: 4px; }
-  .brand h1 { font-size: 15px; }
-  .header-actions { margin-left: auto; }
+  /* One compact header row: logo, story tabs, actions. */
+  .app-header { --header-height: 52px; gap: 6px; padding: 0 6px 0 12px; }
+  .brand h1 {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .brand-mark { width: 24px; height: 24px; }
+  .tab-list { padding-top: 8px; }
+  .tab-name { max-width: 116px; height: 34px; padding-left: 10px; font-size: 13.5px; }
+  .tab-close { width: 22px; margin-right: 4px; }
+  .header-actions { gap: 0; }
   .save-status { display: none; }
-  .tabs { order: 3; flex-basis: 100%; }
-  .tab-list { padding-top: 2px; }
-  .board { scroll-snap-type: x proximity; }
-  .column { scroll-snap-align: start; scroll-margin-left: 16px; }
-  .column-main { --column-width: min(320px, calc(100vw - 48px)); }
-  .column-subplot { --column-width: min(288px, calc(100vw - 48px)); }
+  #data-btn { width: 34px; height: 34px; padding: 0; justify-content: center; border-color: transparent; background: none; color: var(--muted); }
+  #data-btn .btn-label { display: none; }
+  .header-actions .icon-btn { width: 32px; }
+
+  /* One column per screen, snapping into place, with a sliver of the next
+     column showing so it's clear the board scrolls sideways. */
+  .board {
+    gap: 12px; padding: 12px 24px;
+    scroll-snap-type: x mandatory; scroll-padding-inline: 24px;
+  }
+  body.is-dragging .board { scroll-snap-type: none; }
+  .subplots { gap: 12px; padding: 0; }
+  .column, .add-subplot { scroll-snap-align: center; scroll-snap-stop: always; }
+  .column-main, .column-subplot { --column-width: calc(100vw - 48px); }
+  .column-main { margin: 0; max-height: 100%; }
+  .add-subplot { width: calc(100vw - 48px); }
+
+  .column-header { padding: 10px 10px 6px 12px; }
+  .card-list { padding: 2px 8px 8px; }
+  .column-footer { padding: 6px 8px 8px; }
+  .card { padding: 9px 10px 9px 0; gap: 4px; }
+  .card-grip { width: 26px; height: 32px; margin-top: -4px; }
+  .card-num { min-width: 22px; }
+  .tag { max-width: 130px; }
+
+  .column-nav {
+    flex: none; display: flex; gap: 6px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    overflow-x: auto; scrollbar-width: none;
+    background: var(--header-bg, var(--surface));
+    border-top: 1px solid var(--border);
+  }
+  .column-nav::-webkit-scrollbar { display: none; }
+  .column-nav button {
+    flex: none; display: inline-flex; align-items: center; gap: 6px;
+    max-width: 180px; height: 32px; padding: 0 12px;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: var(--surface); color: var(--muted);
+    font-size: 13px; white-space: nowrap; cursor: pointer;
+  }
+  .column-nav button span:last-child { overflow: hidden; text-overflow: ellipsis; }
+  .column-nav button[aria-current="true"] { border-color: var(--primary); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--primary); }
+  .column-nav .subplot-dot { width: 9px; height: 9px; box-shadow: none; }
+  [data-theme="summer"] .column-nav { background: #f6eedc; }
+
   .theme-grid { grid-template-columns: repeat(2, 1fr); }
   .delete-list { grid-template-columns: 1fr; gap: 4px; }
   .delete-list .panel-text { margin-bottom: 8px; }

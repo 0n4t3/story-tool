@@ -85,8 +85,8 @@
     tab.order.forEach(function (id, i) {
       var ch = tab.chapters[id];
       var subplots = [];
-      tab.subplots.forEach(function (sp, j) {
-        if (sp.chapterIds.indexOf(id) >= 0) subplots.push(store.letterFor(j));
+      tab.subplots.forEach(function (sp) {
+        if (sp.chapterIds.indexOf(id) >= 0) subplots.push(md(sp.name));
       });
       out.push('### ' + (i + 1) + '. ' + md(ch.name));
       out.push('');
@@ -97,9 +97,8 @@
 
     if (tab.subplots.length) {
       out.push('## Subplots', '');
-      tab.subplots.forEach(function (sp, j) {
-        var letter = store.letterFor(j);
-        out.push('### ' + letter + ': ' + md(sp.name), '');
+      tab.subplots.forEach(function (sp) {
+        out.push('### ' + md(sp.name), '');
         if (!sp.chapterIds.length) out.push('_No chapters._');
         sp.chapterIds.forEach(function (id, k) {
           out.push((k + 1) + '. ' + md(tab.chapters[id].name) + ' (Chapter ' + (tab.order.indexOf(id) + 1) + ')');
